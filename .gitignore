@@ -1,0 +1,27 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Package distributions
+*.egg-info/
+build/
+dist/
+
+# UV lock file (if you prefer to ignore it, though typically lock files are committed)
+# uv.lock
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# MacOS
+.DS_Store
