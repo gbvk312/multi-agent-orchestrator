@@ -99,6 +99,9 @@ class BaseAgent:
         for _round_num in range(self.max_tool_rounds):
             response = await self._call_model_with_retry(contents, config)
 
+            if not response.candidates:
+                return f"[{self.name}] Generation failed or blocked by safety settings."
+
             # If the model returns a text response, we're done
             if not response.function_calls:
                 return response.text or ""
@@ -131,8 +134,7 @@ class BaseAgent:
         last_error = None
         for attempt in range(self.max_retries):
             try:
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
+                response = await self.client.aio.models.generate_content(
                     model=self.model,
                     contents=contents,
                     config=config,
