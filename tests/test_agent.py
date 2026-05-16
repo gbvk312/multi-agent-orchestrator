@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from google.genai import types
@@ -170,3 +170,140 @@ def test_base_agent_missing_api_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(AgentError, match="GEMINI_API_KEY"):
         BaseAgent(name="NoKeyAgent", system_prompt="Prompt")
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_timeout(mock_client_class):
+    """Verify that process() raises AgentError on TimeoutError."""
+    agent = BaseAgent(name="TimeoutAgent", system_prompt="Prompt", timeout=0.01)
+
+    async def slow_process(*args, **kwargs):
+        import asyncio
+
+        await asyncio.sleep(0.1)
+        return "Done"
+
+    with patch.object(agent, "_process_inner", side_effect=slow_process):
+        with pytest.raises(AgentError, match="Processing timed out"):
+            await agent.process("query", [])
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_max_tool_rounds(mock_client_class):
+    """Verify it stops after max_tool_rounds."""
+    mock_client = mock_client_class.return_value
+    agent = BaseAgent(name="MaxToolAgent", system_prompt="Prompt", max_tool_rounds=1, tools=[lambda x: x])
+
+    mock_fn_call = MagicMock()
+    mock_fn_call.name = "<lambda>"
+    mock_fn_call.args = {"x": "y"}
+
+    mock_tool_response = MagicMock()
+    mock_tool_response.function_calls = [mock_fn_call]
+    mock_tool_response.candidates = [MagicMock()]
+    mock_tool_response.candidates[0].content = types.Content(role="model", parts=[])
+
+    mock_client.models.generate_content.return_value = mock_tool_response
+
+    response = await agent.process("query", [])
+    assert "Reached maximum tool execution rounds" in response
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_unrecoverable_model_error(mock_client_class):
+    """Verify generic model errors are raised immediately."""
+    mock_client = mock_client_class.return_value
+    mock_client.models.generate_content.side_effect = Exception("Some weird error")
+
+    agent = BaseAgent(name="ErrorAgent", system_prompt="Prompt")
+    with pytest.raises(AgentError, match="Model call failed: Some weird error"):
+        await agent.process("query", [])
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_tool_exception(mock_client_class):
+    """Verify tool exceptions are caught and returned as string."""
+    mock_client = mock_client_class.return_value
+
+    def failing_tool():
+        raise ValueError("Tool failed miserably")
+
+    mock_fn_call = MagicMock()
+    mock_fn_call.name = "failing_tool"
+    mock_fn_call.args = {}
+
+    mock_tool_response = MagicMock()
+    mock_tool_response.function_calls = [mock_fn_call]
+    mock_tool_response.candidates = [MagicMock()]
+    mock_tool_response.candidates[0].content = types.Content(role="model", parts=[])
+
+    mock_final_response = MagicMock()
+    mock_final_response.function_calls = None
+    mock_final_response.text = "Handled"
+
+    mock_client.models.generate_content.side_effect = [mock_tool_response, mock_final_response]
+
+    agent = BaseAgent(name="FailingToolAgent", system_prompt="Prompt", tools=[failing_tool])
+    await agent.process("query", [])
+
+    # We can check what was passed to the 2nd model call
+    _, kwargs = mock_client.models.generate_content.call_args
+    contents = kwargs["contents"]
+    fn_response_part = contents[-1].parts[0]
+    # Check if the string representation contains the error message
+    assert "Error executing tool" in str(fn_response_part.function_response)
+    assert "Tool failed miserably" in str(fn_response_part.function_response)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_async_tool(mock_client_class):
+    """Verify async tools are supported."""
+    mock_client = mock_client_class.return_value
+
+    async def async_tool():
+        return "Async Result"
+
+    mock_fn_call = MagicMock()
+    mock_fn_call.name = "async_tool"
+    mock_fn_call.args = {}
+
+    mock_tool_response = MagicMock()
+    mock_tool_response.function_calls = [mock_fn_call]
+    mock_tool_response.candidates = [MagicMock()]
+    mock_tool_response.candidates[0].content = types.Content(role="model", parts=[])
+
+    mock_final_response = MagicMock()
+    mock_final_response.function_calls = None
+    mock_final_response.text = "Handled Async"
+
+    mock_client.models.generate_content.side_effect = [mock_tool_response, mock_final_response]
+
+    agent = BaseAgent(name="AsyncToolAgent", system_prompt="Prompt", tools=[async_tool])
+    response = await agent.process("query", [])
+
+    assert response == "Handled Async"
+    _, kwargs = mock_client.models.generate_content.call_args
+    contents = kwargs["contents"]
+    fn_response_part = contents[-1].parts[0]
+    assert "Async Result" in str(fn_response_part.function_response)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_retries_exhausted(mock_client_class):
+    """Verify that after max_retries of 429 errors, it raises AgentError."""
+    mock_client = mock_client_class.return_value
+    mock_client.models.generate_content.side_effect = Exception("429 Too Many Requests")
+
+    agent = BaseAgent(name="ExhaustedAgent", system_prompt="Prompt", max_retries=2)
+    # Patch asyncio.sleep so we don't actually wait
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(AgentError, match="All 2 retries exhausted"):
+            await agent.process("query", [])
+    
+    assert mock_client.models.generate_content.call_count == 2

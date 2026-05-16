@@ -25,7 +25,7 @@ class MemoryBackend(ABC):
 class InMemoryBackend(MemoryBackend):
     """In-process dictionary-based memory backend (default)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._store: dict[str, list[dict[str, Any]]] = {}
 
     async def load(self, session_id: str) -> list[dict[str, Any]]:

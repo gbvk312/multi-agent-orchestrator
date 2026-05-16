@@ -32,6 +32,9 @@ jobs:
       - name: Check formatting with ruff
         run: uv run ruff format --check .
 
+      - name: Type check with mypy
+        run: uv run mypy multi_agent_orchestrator/
+
       - name: Run tests with coverage
         run: uv run pytest tests/ -v --tb=short --cov=multi_agent_orchestrator --cov-report=term-missing
         env:

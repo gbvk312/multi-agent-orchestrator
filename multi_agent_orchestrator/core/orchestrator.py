@@ -93,9 +93,10 @@ you must decide which agent is best suited to handle the request.
                 config=types.GenerateContentConfig(temperature=self._config.routing_temperature),
             )
 
-            selected_agent = response.text.strip()
-            if selected_agent in self.agents:
-                return selected_agent
+            if response.text:
+                selected_agent = response.text.strip()
+                if selected_agent in self.agents:
+                    return selected_agent
         except Exception as e:
             logger.warning("Routing LLM call failed (%s), falling back to first agent.", e)
 

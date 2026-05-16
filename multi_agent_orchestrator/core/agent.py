@@ -32,7 +32,7 @@ class BaseAgent:
         name: str,
         system_prompt: str,
         model: str | None = None,
-        tools: list[Callable] | None = None,
+        tools: list[Callable[..., Any]] | None = None,
         max_retries: int | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
@@ -53,7 +53,7 @@ class BaseAgent:
         self.max_tool_rounds = max_tool_rounds if max_tool_rounds is not None else self._config.max_tool_rounds
 
         # Build a lookup map for tool execution
-        self._tool_map: dict[str, Callable] = {fn.__name__: fn for fn in self.tools}
+        self._tool_map: dict[str, Callable[..., Any]] = {fn.__name__: fn for fn in self.tools}
 
         # Validate API key early — fail fast instead of at first API call
         self._api_key = api_key or self._config.gemini_api_key
@@ -92,7 +92,7 @@ class BaseAgent:
 
         config = types.GenerateContentConfig(
             system_instruction=self.system_prompt,
-            tools=self.tools if self.tools else None,
+            tools=self.tools if self.tools else None,  # type: ignore[arg-type]
             temperature=self.temperature,
         )
 
@@ -110,12 +110,14 @@ class BaseAgent:
                 tool_results.append(result)
 
             # Add the model's function call response and our results to the conversation
-            contents.append(response.candidates[0].content)
+            if response.candidates and response.candidates[0].content:
+                contents.append(response.candidates[0].content)
 
             # Build function response parts
             fn_response_parts = []
             for call, result in zip(response.function_calls, tool_results, strict=True):
-                fn_response_parts.append(types.Part.from_function_response(name=call.name, response={"result": result}))
+                if call.name:
+                    fn_response_parts.append(types.Part.from_function_response(name=call.name, response={"result": result}))
             contents.append(types.Content(role="user", parts=fn_response_parts))
 
         # If we exhausted rounds, return what we have
@@ -124,7 +126,7 @@ class BaseAgent:
             f" ({self.max_tool_rounds}). Last response may be incomplete."
         )
 
-    async def _call_model_with_retry(self, contents, config):
+    async def _call_model_with_retry(self, contents: list[types.Content], config: types.GenerateContentConfig) -> types.GenerateContentResponse:
         """Calls the Gemini model with retry logic for transient errors."""
         last_error = None
         for attempt in range(self.max_retries):
@@ -157,8 +159,11 @@ class BaseAgent:
             f"[{self.name}] All {self.max_retries} retries exhausted. Last error: {last_error}"
         ) from last_error
 
-    async def _execute_tool(self, call) -> str:
+    async def _execute_tool(self, call: types.FunctionCall) -> str:
         """Executes a single tool call and returns the result as a string."""
+        if not call.name:
+            return "Error: Unknown tool call without a name."  # pragma: no cover
+            
         tool_fn = self._tool_map.get(call.name)
         if not tool_fn:
             return f"Error: Unknown tool '{call.name}'. Available tools: {list(self._tool_map.keys())}"

@@ -229,3 +229,72 @@ def test_orchestrator_missing_api_key(mock_client, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(OrchestratorError, match="GEMINI_API_KEY"):
         Orchestrator()
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_route_request_llm_exception_fallback(mock_client_class):
+    """Verify routing falls back to the first agent if the LLM raises an exception."""
+    mock_client = mock_client_class.return_value
+    mock_client.models.generate_content.side_effect = Exception("API Error")
+
+    orchestrator = Orchestrator()
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.system_prompt = "Prompt A"
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.system_prompt = "Prompt B"
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    selected = await orchestrator._route_request("Query")
+    assert selected == "AgentA"
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_process_request_agent_error(mock_client_class):
+    """Verify process_request handles AgentError and returns a formatted string."""
+    from multi_agent_orchestrator.core.agent import AgentError
+
+    orchestrator = Orchestrator()
+
+    mock_agent = MagicMock(spec=BaseAgent)
+    mock_agent.name = "AgentA"
+    mock_agent.system_prompt = "Test prompt"
+    mock_agent.process = AsyncMock(side_effect=AgentError("Agent failed hard"))
+    orchestrator.register_agent(mock_agent)
+
+    # Route request mocked to return AgentA
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        response = await orchestrator.process_request("session_1", "User query")
+
+    assert "Error from AgentA: Agent failed hard" in response
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_fan_out_agent_error(mock_client_class):
+    """Verify fan_out catches AgentError and includes it in results."""
+    from multi_agent_orchestrator.core.agent import AgentError
+
+    orchestrator = Orchestrator()
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(return_value="Response A")
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process = AsyncMock(side_effect=AgentError("AgentB blew up"))
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    results = await orchestrator.fan_out("session_1", "Multi query")
+
+    assert results["AgentA"] == "Response A"
+    assert "Error from AgentB: AgentB blew up" in results["AgentB"]

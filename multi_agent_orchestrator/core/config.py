@@ -1,6 +1,7 @@
 """Centralized configuration for the Multi-Agent Orchestrator."""
 
 import os
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -26,9 +27,9 @@ class OrchestratorConfig(BaseModel):
     routing_temperature: float = Field(default=0.0, ge=0, le=2)
 
     @classmethod
-    def from_env(cls, **overrides) -> "OrchestratorConfig":
+    def from_env(cls, **overrides: Any) -> "OrchestratorConfig":
         """Create config from environment variables with optional overrides."""
-        env_map = {
+        env_map: dict[str, Any] = {
             "gemini_api_key": os.getenv("GEMINI_API_KEY", ""),
             "default_model": os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"),
             "max_tool_rounds": int(os.getenv("MAX_TOOL_ROUNDS", "5")),
