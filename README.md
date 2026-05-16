@@ -1,19 +1,25 @@
 # Multi-Agent Orchestrator (Nexus)
 
+[![CI](https://github.com/gbvk312/multi-agent-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/gbvk312/multi-agent-orchestrator/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 An asynchronous, from-scratch Python framework for building complex multi-agent workflows, powered by Google's Gemini.
 
 ## Features
 - **Dynamic Routing**: A smart `Orchestrator` that evaluates user intent and routes prompts to the most capable agent.
-- **Context Management**: A centralized `MemoryManager` that passes context seamlessly during agent handoffs.
-- **Gemini Powered**: Uses the new `google-genai` SDK to run `gemini-2.5-flash` natively, with support for advanced function calling.
+- **Automatic Tool Execution**: Agents automatically execute function calls and feed results back to the model in a loop (up to 5 rounds).
+- **Error Handling & Retries**: Built-in exponential backoff for rate limits (429) and server errors, with configurable retry counts.
+- **Context Management**: A bounded `MemoryManager` that passes context seamlessly during agent handoffs (configurable `max_history`).
+- **Gemini Powered**: Uses the `google-genai` SDK to run `gemini-2.5-flash` natively, with full async support.
 
 ## Architecture
 
-1. **User Request** -> `Orchestrator.process_request()`
-2. **Orchestrator** -> Analyzes the intent using an LLM router.
+1. **User Request** -> `await Orchestrator.process_request()`
+2. **Orchestrator** -> Analyzes the intent using an async LLM router.
 3. **Delegation** -> Hands off the context to the `BaseAgent` (e.g., `ResearchAgent` or `CodingAgent`).
-4. **Execution** -> Agent executes tools or generates text.
-5. **Memory** -> Response is saved to the session history.
+4. **Execution** -> Agent executes tools automatically in a loop until the model produces a text response.
+5. **Memory** -> Response is saved to the bounded session history.
 
 ## Installation
 
@@ -44,6 +50,7 @@ pip install -e ".[dev]"
 ## Creating Custom Agents
 
 ```python
+import asyncio
 from multi_agent_orchestrator.core import BaseAgent, Orchestrator
 
 # Define a custom tool
@@ -61,9 +68,21 @@ weather_agent = BaseAgent(
 orchestrator = Orchestrator()
 orchestrator.register_agent(weather_agent)
 
-response = orchestrator.process_request(
-    session_id="session_123", 
-    query="What's the weather in London?"
-)
-print(response)
+# Process request (async)
+async def main():
+    response = await orchestrator.process_request(
+        session_id="session_123",
+        query="What's the weather in London?"
+    )
+    print(response)
+
+asyncio.run(main())
 ```
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+---
+
+*Built with ❤️ by [gbvk312](https://github.com/gbvk312).*
