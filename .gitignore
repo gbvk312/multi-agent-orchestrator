@@ -25,6 +25,9 @@ dist/
 
 # Test / build caches
 .pytest_cache/
-
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 # MacOS
 .DS_Store

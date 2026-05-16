@@ -9,9 +9,12 @@ An asynchronous, from-scratch Python framework for building complex multi-agent 
 ## Features
 - **Dynamic Routing**: A smart `Orchestrator` that evaluates user intent and routes prompts to the most capable agent.
 - **Automatic Tool Execution**: Agents automatically execute function calls and feed results back to the model in a loop (up to 5 rounds).
+- **Parallel Execution**: Use the `fan_out` method to execute multiple independent agents concurrently for complex tasks.
 - **Error Handling & Retries**: Built-in exponential backoff for rate limits (429) and server errors, with configurable retry counts.
-- **Context Management**: A bounded `MemoryManager` that passes context seamlessly during agent handoffs (configurable `max_history`).
+- **Context Management & Pluggable Memory**: A bounded `MemoryManager` passes context across agents seamlessly. Swap in Redis, SQLite, or custom backends via the `MemoryBackend` interface.
+- **Security Enhancements**: Fail-fast mechanisms for API keys prevent silent failures.
 - **Gemini Powered**: Uses the `google-genai` SDK to run `gemini-2.5-flash` natively, with full async support.
+- **Production-Ready**: Adheres to high hygiene standards with CI/CD matrix testing and comprehensive code formatting checks.
 
 ## Architecture
 
@@ -27,11 +30,14 @@ An asynchronous, from-scratch Python framework for building complex multi-agent 
 git clone https://github.com/gbvk312/multi-agent-orchestrator.git
 cd multi-agent-orchestrator
 
-# Create a virtual environment
+# Using uv (Recommended)
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+
+# Or using standard pip
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install the package
 pip install -e ".[dev]"
 ```
 
