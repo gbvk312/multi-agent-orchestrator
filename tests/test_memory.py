@@ -1,5 +1,6 @@
 import pytest
-from multi_agent_orchestrator.core.memory import MemoryManager, InMemoryBackend
+
+from multi_agent_orchestrator.core.memory import InMemoryBackend, MemoryManager
 
 
 @pytest.mark.asyncio
@@ -85,6 +86,30 @@ async def test_custom_backend():
     stored = await backend.load("s1")
     assert len(stored) == 1
     assert stored[0]["content"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_per_session_lock_isolation():
+    """Verify that per-session locks are created independently."""
+    memory = MemoryManager()
+    await memory.add_message("s1", "user", "msg1")
+    await memory.add_message("s2", "user", "msg2")
+
+    # Each session should have its own lock
+    assert "s1" in memory._locks
+    assert "s2" in memory._locks
+    assert memory._locks["s1"] is not memory._locks["s2"]
+
+
+@pytest.mark.asyncio
+async def test_clear_removes_session_lock():
+    """Clearing a session should also clean up its lock entry."""
+    memory = MemoryManager()
+    await memory.add_message("s1", "user", "msg")
+    assert "s1" in memory._locks
+
+    await memory.clear("s1")
+    assert "s1" not in memory._locks
 
 
 def test_memory_manager_repr():

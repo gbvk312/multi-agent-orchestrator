@@ -1,7 +1,9 @@
-import pytest
 from unittest.mock import MagicMock, patch
-from multi_agent_orchestrator.core.agent import BaseAgent, AgentError
+
+import pytest
 from google.genai import types
+
+from multi_agent_orchestrator.core.agent import AgentError, BaseAgent
 
 
 @patch("multi_agent_orchestrator.core.agent.genai.Client")
@@ -12,7 +14,28 @@ def test_base_agent_initialization(mock_client):
     assert agent.model == "gemini-2.5-flash"
     assert agent.tools == []
     assert agent.timeout == 120.0
+    assert agent.temperature == 0.2
+    assert agent.max_tool_rounds == 5
     mock_client.assert_called_once()
+
+
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+def test_base_agent_explicit_params_override_config(mock_client):
+    """Explicit constructor params should take precedence over config defaults."""
+    agent = BaseAgent(
+        name="Custom",
+        system_prompt="Prompt",
+        model="gemini-2.0-flash",
+        max_retries=1,
+        timeout=30.0,
+        temperature=0.8,
+        max_tool_rounds=2,
+    )
+    assert agent.model == "gemini-2.0-flash"
+    assert agent.max_retries == 1
+    assert agent.timeout == 30.0
+    assert agent.temperature == 0.8
+    assert agent.max_tool_rounds == 2
 
 
 @patch("multi_agent_orchestrator.core.agent.genai.Client")
@@ -53,6 +76,7 @@ async def test_base_agent_process(mock_client_class):
     assert contents[2].role == "user"
     assert contents[2].parts[0].text == "current query"
     assert kwargs["config"].system_instruction == "System Prompt"
+    assert kwargs["config"].temperature == 0.2
 
 
 @pytest.mark.asyncio

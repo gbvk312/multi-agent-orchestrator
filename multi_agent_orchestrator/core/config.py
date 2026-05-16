@@ -1,6 +1,7 @@
 """Centralized configuration for the Multi-Agent Orchestrator."""
 
 import os
+
 from pydantic import BaseModel, Field
 
 
@@ -10,6 +11,9 @@ class OrchestratorConfig(BaseModel):
     Usage:
         config = OrchestratorConfig.from_env()
         config = OrchestratorConfig(gemini_api_key="...", max_history=100)
+
+    Note: Call ``dotenv.load_dotenv()`` at your application entry-point
+    before using ``from_env()`` if you need ``.env`` file support.
     """
 
     gemini_api_key: str = Field(default="")
@@ -24,10 +28,6 @@ class OrchestratorConfig(BaseModel):
     @classmethod
     def from_env(cls, **overrides) -> "OrchestratorConfig":
         """Create config from environment variables with optional overrides."""
-        from dotenv import load_dotenv
-
-        load_dotenv()
-
         env_map = {
             "gemini_api_key": os.getenv("GEMINI_API_KEY", ""),
             "default_model": os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"),

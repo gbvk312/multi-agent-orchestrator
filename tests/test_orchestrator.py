@@ -1,8 +1,10 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-from multi_agent_orchestrator.core.orchestrator import Orchestrator
+
 from multi_agent_orchestrator.core.agent import BaseAgent
 from multi_agent_orchestrator.core.memory import MemoryManager
+from multi_agent_orchestrator.core.orchestrator import Orchestrator, OrchestratorError
 
 
 @patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
@@ -131,6 +133,15 @@ async def test_route_request_fallback(mock_client_class):
 
 @pytest.mark.asyncio
 @patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_route_request_no_agents_raises(mock_client_class):
+    """Routing with no agents should raise OrchestratorError."""
+    orchestrator = Orchestrator()
+    with pytest.raises(OrchestratorError, match="No agents registered"):
+        await orchestrator._route_request("Query")
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
 async def test_process_request(mock_client_class):
     mock_client = mock_client_class.return_value
 
@@ -183,18 +194,25 @@ async def test_fan_out(mock_client_class):
     agent_a.process.assert_called_once()
     agent_b.process.assert_called_once()
 
+    # Verify fan_out saves to memory
+    history = await orchestrator.memory.get_history("session_1")
+    assert len(history) == 2
+    assert history[0] == {"role": "user", "content": "Multi query"}
+    assert "[AgentA]: Response A" in history[1]["content"]
+    assert "[AgentB]: Response B" in history[1]["content"]
+
 
 @pytest.mark.asyncio
 @patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
 async def test_fan_out_unknown_agent_raises(mock_client_class):
-    """fan_out should raise ValueError for unknown agent names."""
+    """fan_out should raise OrchestratorError for unknown agent names."""
     orchestrator = Orchestrator()
 
     agent = MagicMock(spec=BaseAgent)
     agent.name = "AgentA"
     orchestrator.register_agent(agent)
 
-    with pytest.raises(ValueError, match="Unknown agents"):
+    with pytest.raises(OrchestratorError, match="Unknown agents"):
         await orchestrator.fan_out("s1", "query", agent_names=["NonExistent"])
 
 
@@ -203,3 +221,11 @@ def test_orchestrator_repr(mock_client):
     orchestrator = Orchestrator()
     assert "Orchestrator" in repr(orchestrator)
     assert "gemini-2.5-flash" in repr(orchestrator)
+
+
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+def test_orchestrator_missing_api_key(mock_client, monkeypatch):
+    """Orchestrator should fail fast if no API key is available."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(OrchestratorError, match="GEMINI_API_KEY"):
+        Orchestrator()
