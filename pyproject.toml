@@ -16,11 +16,19 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+
+
 dependencies = [
     "google-genai>=0.5.0",
     "pydantic>=2.0.0",
+    "pydantic-settings>=2.14.1",
     "python-dotenv>=1.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/gbvk312/multi-agent-orchestrator"
+Repository = "https://github.com/gbvk312/multi-agent-orchestrator"
+Issues = "https://github.com/gbvk312/multi-agent-orchestrator/issues"
 
 [project.optional-dependencies]
 dev = [

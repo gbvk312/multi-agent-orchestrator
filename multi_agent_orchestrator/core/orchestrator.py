@@ -1,6 +1,8 @@
+import os
 import asyncio
 import logging
-from typing import Dict, Optional
+import uuid
+from typing import Dict, List, Optional
 from google import genai
 from google.genai import types
 
@@ -17,15 +19,31 @@ class Orchestrator:
     and select the most appropriate agent. All processing is async.
     """
 
-    def __init__(self, memory_manager: Optional[MemoryManager] = None):
+    def __init__(
+        self,
+        memory_manager: Optional[MemoryManager] = None,
+        model: str = "gemini-2.5-flash",
+        api_key: Optional[str] = None,
+    ):
         self.agents: Dict[str, BaseAgent] = {}
         self.memory = memory_manager or MemoryManager()
-        self.client = genai.Client()
-        self.model = "gemini-2.5-flash"
+        self.model = model
 
-    def register_agent(self, agent: BaseAgent):
+        # Validate API key early
+        self._api_key = api_key or os.getenv("GEMINI_API_KEY")
+        if not self._api_key:
+            raise ValueError("GEMINI_API_KEY environment variable or api_key parameter is required")
+        self.client = genai.Client(api_key=self._api_key)
+
+    def register_agent(self, agent: BaseAgent) -> None:
         """Registers an agent with the orchestrator."""
+        if agent.name in self.agents:
+            logger.warning(f"Overwriting existing agent: {agent.name}")
         self.agents[agent.name] = agent
+
+    def unregister_agent(self, name: str) -> bool:
+        """Removes a registered agent. Returns True if the agent existed."""
+        return self.agents.pop(name, None) is not None
 
     async def _route_request(self, query: str) -> str:
         """Determines which agent should handle the request."""
@@ -39,7 +57,10 @@ class Orchestrator:
             return agent_names[0]
 
         agent_descriptions = "\n".join(
-            [f"- {name}: {agent.system_prompt[:100]}..." for name, agent in self.agents.items()]
+            [
+                f"- {name}: {agent.system_prompt[:100]}{'...' if len(agent.system_prompt) > 100 else ''}"
+                for name, agent in self.agents.items()
+            ]
         )
 
         routing_prompt = f"""
@@ -72,28 +93,68 @@ class Orchestrator:
 
     async def process_request(self, session_id: str, query: str) -> str:
         """Processes a user request by routing it to the appropriate agent."""
+        trace_id = uuid.uuid4().hex[:12]
+        logger.info(f"[{trace_id}] Processing request for session={session_id}")
 
         # 1. Determine which agent should handle this
         target_agent_name = await self._route_request(query)
         target_agent = self.agents[target_agent_name]
 
-        # 2. Get session history
-        history = self.memory.get_history(session_id)
+        # 2. Get session history BEFORE adding current query
+        history = await self.memory.get_history(session_id)
 
-        # 3. Add current query to memory
-        self.memory.add_message(session_id, "user", query)
-
-        # 4. Delegate to the agent
-        logger.info(f"[{self.__class__.__name__}] Routing to -> {target_agent_name}")
-        print(f"[{self.__class__.__name__}] Routing to -> {target_agent_name}")
+        # 3. Delegate to the agent
+        logger.info(f"[{trace_id}] Routing to -> {target_agent_name}")
 
         try:
             response_text = await target_agent.process(query, history)
         except AgentError as e:
             response_text = f"Error from {target_agent_name}: {e}"
-            logger.error(response_text)
+            logger.error(f"[{trace_id}] {response_text}")
 
-        # 5. Save response to memory
-        self.memory.add_message(session_id, "model", response_text)
+        # 4. Save BOTH messages to memory AFTER processing
+        await self.memory.add_message(session_id, "user", query)
+        await self.memory.add_message(session_id, "model", response_text)
 
         return response_text
+
+    async def fan_out(
+        self,
+        session_id: str,
+        query: str,
+        agent_names: Optional[List[str]] = None,
+    ) -> Dict[str, str]:
+        """Execute multiple agents in parallel and return all results.
+
+        Args:
+            session_id: Session identifier for context retrieval.
+            query: The user query to process.
+            agent_names: Optional list of agent names to run. Defaults to all.
+
+        Returns:
+            Dict mapping agent names to their responses.
+        """
+        trace_id = uuid.uuid4().hex[:12]
+        targets = agent_names or list(self.agents.keys())
+
+        # Validate all target agents exist
+        unknown = [n for n in targets if n not in self.agents]
+        if unknown:
+            raise ValueError(f"Unknown agents: {unknown}")
+
+        history = await self.memory.get_history(session_id)
+        logger.info(f"[{trace_id}] Fan-out to {len(targets)} agents: {targets}")
+
+        async def _run_agent(name: str) -> tuple[str, str]:
+            try:
+                result = await self.agents[name].process(query, history)
+                return name, result
+            except AgentError as e:
+                logger.error(f"[{trace_id}] Agent {name} failed: {e}")
+                return name, f"Error from {name}: {e}"
+
+        results = await asyncio.gather(*[_run_agent(n) for n in targets])
+        return dict(results)
+
+    def __repr__(self) -> str:
+        return f"Orchestrator(model={self.model!r}, agents={list(self.agents.keys())})"

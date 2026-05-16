@@ -23,5 +23,8 @@ dist/
 *.swp
 *.swo
 
+# Test / build caches
+.pytest_cache/
+
 # MacOS
 .DS_Store
