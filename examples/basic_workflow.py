@@ -1,5 +1,6 @@
 import os
 import sys
+import asyncio
 
 # Ensure the local package is importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -11,11 +12,11 @@ def write_python_function(function_name: str, purpose: str) -> str:
     """Generates a skeleton python function based on a purpose."""
     return f"def {function_name}():\n    # TODO: {purpose}\n    pass\n"
 
-def main():
+async def main():
     # Load environment variables from .env
     from dotenv import load_dotenv
     load_dotenv()
-    
+
     # Make sure GEMINI_API_KEY is set in your environment
     if not os.getenv("GEMINI_API_KEY"):
         print("Please set GEMINI_API_KEY environment variable.")
@@ -26,7 +27,7 @@ def main():
         name="Research_Agent",
         system_prompt="You are a researcher. Your job is to gather and summarize information concisely."
     )
-    
+
     coding_agent = BaseAgent(
         name="Coding_Agent",
         system_prompt="You are an expert Python developer. Provide high-quality code snippets.",
@@ -39,7 +40,7 @@ def main():
     orchestrator.register_agent(coding_agent)
 
     session_id = "demo_session_1"
-    
+
     print("Multi-Agent Orchestrator initialized. Two agents available: Research_Agent, Coding_Agent.")
     print("--------------------------------------------------")
 
@@ -51,8 +52,8 @@ def main():
 
     for query in queries:
         print(f"\nUser: {query}")
-        response = orchestrator.process_request(session_id=session_id, query=query)
+        response = await orchestrator.process_request(session_id=session_id, query=query)
         print(f"Response:\n{response}")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
