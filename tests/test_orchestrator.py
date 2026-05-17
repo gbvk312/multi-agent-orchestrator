@@ -998,3 +998,160 @@ async def test_route_request_with_async_callable_system_prompt(mock_client_class
     _, kwargs = mock_client.aio.models.generate_content.call_args
     routing_prompt = kwargs["contents"]
     assert "Async prompt: Async route" in routing_prompt
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_context_manager():
+    """Verify that Orchestrator functions as an async context manager and close delegates to memory."""
+    from unittest.mock import AsyncMock
+
+    from multi_agent_orchestrator.core.memory import MemoryManager
+    from multi_agent_orchestrator.core.orchestrator import Orchestrator
+
+    mock_memory = MagicMock(spec=MemoryManager)
+    mock_memory.close = AsyncMock()
+
+    async with Orchestrator(memory_manager=mock_memory) as orchestrator:
+        assert isinstance(orchestrator, Orchestrator)
+
+    mock_memory.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_route_request_json_fallback(mock_client_class):
+    """Verify that route_request handles raw parsed JSON (non-string types or strings with quotes) correctly."""
+    from multi_agent_orchestrator.core.agent import BaseAgent
+    from multi_agent_orchestrator.core.orchestrator import Orchestrator
+
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.system_prompt = "A"
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.system_prompt = "B"
+
+    # Scenario 1: LLM returns serialized JSON dictionary containing a string
+    orchestrator1 = Orchestrator()
+    orchestrator1.register_agent(agent_a)
+    orchestrator1.register_agent(agent_b)
+
+    mock_response = MagicMock()
+    mock_response.text = '"AgentB"'  # json string "AgentB" (with outer quotes)
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    res1 = await orchestrator1._route_request("query")
+    assert res1 == "AgentB"
+
+    # Scenario 2: LLM returns raw int (which is valid JSON)
+    mock_response.text = "123"
+    res2 = await orchestrator1._route_request("query")
+    # Should fall back to the first agent "AgentA" since "123" is not a registered agent
+    assert res2 == "AgentA"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_chain_with_events_and_errors():
+    """Verify sequential chaining handles events, and respects propagate_errors."""
+    from multi_agent_orchestrator.core.agent import BaseAgent
+    from multi_agent_orchestrator.core.config import OrchestratorConfig
+    from multi_agent_orchestrator.core.events import (
+        EventHandler,
+        OrchestratorErrorEvent,
+        OrchestratorFinishEvent,
+        OrchestratorRouteEvent,
+        OrchestratorStartEvent,
+    )
+    from multi_agent_orchestrator.core.orchestrator import Orchestrator
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(return_value="Output A")
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process = AsyncMock(side_effect=ValueError("B failed"))
+
+    # Config with propagate_errors = False
+    config_false = OrchestratorConfig(propagate_errors=False, gemini_api_key="mock-key")
+    orchestrator_false = Orchestrator(config=config_false)
+    orchestrator_false.register_agent(agent_a)
+    orchestrator_false.register_agent(agent_b)
+
+    handler = MagicMock(spec=EventHandler)
+    handler.on_event = AsyncMock()
+    orchestrator_false.event_handler = handler
+
+    res = await orchestrator_false.chain("s1", "start", ["AgentA", "AgentB"])
+    assert "Chain failed at AgentB" in res
+
+    # Verify events
+    events = [call[0][0] for call in handler.on_event.call_args_list]
+    assert any(isinstance(e, OrchestratorStartEvent) for e in events)
+    assert any(isinstance(e, OrchestratorRouteEvent) and e.agent_name == "AgentA" for e in events)
+    assert any(isinstance(e, OrchestratorRouteEvent) and e.agent_name == "AgentB" for e in events)
+    assert any(isinstance(e, OrchestratorErrorEvent) for e in events)
+
+    # Test successful sequence to hit OrchestratorFinishEvent (line 366)
+    handler.on_event.reset_mock()
+    success_res = await orchestrator_false.chain("s1_success", "start", ["AgentA"])
+    assert success_res == "Output A"
+    success_events = [call[0][0] for call in handler.on_event.call_args_list]
+    assert any(isinstance(e, OrchestratorFinishEvent) for e in success_events)
+
+    # Config with propagate_errors = True
+    config_true = OrchestratorConfig(propagate_errors=True, gemini_api_key="mock-key")
+    orchestrator_true = Orchestrator(config=config_true)
+    orchestrator_true.register_agent(agent_a)
+    orchestrator_true.register_agent(agent_b)
+
+    with pytest.raises(ValueError, match="B failed"):
+        await orchestrator_true.chain("s2", "start", ["AgentA", "AgentB"])
+
+    # Test empty sequence validation (line 312 and 370)
+    from multi_agent_orchestrator.core.orchestrator import OrchestratorError
+
+    handler_empty = MagicMock(spec=EventHandler)
+    handler_empty.on_event = AsyncMock()
+    orchestrator_false.event_handler = handler_empty
+    with pytest.raises(OrchestratorError, match="Sequence of agents cannot be empty"):
+        await orchestrator_false.chain("s3", "start", [])
+
+    empty_events = [call[0][0] for call in handler_empty.on_event.call_args_list]
+    # Check that it fired OrchestratorErrorEvent in the outer try-except!
+    assert any(isinstance(e, OrchestratorErrorEvent) for e in empty_events)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_fan_out_events():
+    """Verify that fan_out correctly fires OrchestratorStartEvent and OrchestratorFinishEvent."""
+    from multi_agent_orchestrator.core.agent import BaseAgent
+    from multi_agent_orchestrator.core.events import (
+        EventHandler,
+        OrchestratorFinishEvent,
+        OrchestratorStartEvent,
+    )
+    from multi_agent_orchestrator.core.orchestrator import Orchestrator
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(return_value="Output A")
+
+    orchestrator = Orchestrator()
+    orchestrator.register_agent(agent_a)
+
+    handler = MagicMock(spec=EventHandler)
+    handler.on_event = AsyncMock()
+    orchestrator.event_handler = handler
+
+    results = await orchestrator.fan_out("s3", "start", ["AgentA"])
+    assert results == {"AgentA": "Output A"}
+
+    # Verify events
+    events = [call[0][0] for call in handler.on_event.call_args_list]
+    assert any(isinstance(e, OrchestratorStartEvent) for e in events)
+    assert any(isinstance(e, OrchestratorFinishEvent) for e in events)

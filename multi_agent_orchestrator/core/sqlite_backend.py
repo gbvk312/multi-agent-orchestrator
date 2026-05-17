@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from typing import Any, cast
 
 import aiosqlite
@@ -11,8 +12,8 @@ class SQLiteMemoryBackend(MemoryBackend):
     """SQLite-based memory backend for persistent storage."""
 
     def __init__(self, db_path: str = "memory.db", table_name: str = "sessions"):
-        if not table_name.isidentifier():
-            raise ValueError(f"Invalid SQLite table name: '{table_name}'. Must be a valid identifier.")
+        if not re.fullmatch(r"[a-zA-Z_]\w*", table_name):
+            raise ValueError(f"Invalid SQLite table name: '{table_name}'. Must be a valid ASCII identifier.")
         self.db_path = db_path
         self.table_name = table_name
         self._db: aiosqlite.Connection | None = None

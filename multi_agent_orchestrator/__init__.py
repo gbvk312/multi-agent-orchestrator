@@ -12,7 +12,33 @@ except Exception:  # pragma: no cover
     pass  # Fallback to hardcoded version above
 
 from importlib import import_module
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .core import (
+        AgentError,
+        AgentFinishEvent,
+        AgentHandoff,
+        AgentStartEvent,
+        BaseAgent,
+        EventHandler,
+        HumanApprovalRequired,
+        InMemoryBackend,
+        MemoryBackend,
+        MemoryManager,
+        Orchestrator,
+        OrchestratorConfig,
+        OrchestratorError,
+        OrchestratorErrorEvent,
+        OrchestratorFinishEvent,
+        OrchestratorHandoffEvent,
+        OrchestratorRouteEvent,
+        OrchestratorStartEvent,
+        RedisMemoryBackend,
+        SQLiteMemoryBackend,
+        ToolCallEvent,
+        ToolResultEvent,
+    )
 
 __all__ = [
     "__version__",

@@ -3,6 +3,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from typing import Any
 
 from google import genai
 from google.genai import types
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 class OrchestratorError(Exception):
     """Raised when the orchestrator encounters an unrecoverable error."""
+
+    def __init__(self, message: str = ""):
+        super().__init__(message)
 
 
 class Orchestrator:
@@ -104,7 +108,8 @@ class Orchestrator:
             )
             if response.text:
                 try:
-                    selected_agent = str(json.loads(response.text))
+                    raw = json.loads(response.text)
+                    selected_agent = raw if isinstance(raw, str) else str(raw).strip('"')
                 except json.JSONDecodeError:
                     selected_agent = str(response.text.strip().strip('"'))
                 if selected_agent in self.agents:
@@ -296,6 +301,16 @@ class Orchestrator:
                 await self.event_handler.on_event(OrchestratorErrorEvent(session_id, e))
             raise
 
+    async def close(self) -> None:
+        """Cleanly close the memory backend."""
+        await self.memory.close()
+
+    async def __aenter__(self) -> "Orchestrator":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.close()
+
     async def chain(
         self,
         session_id: str,
@@ -303,40 +318,58 @@ class Orchestrator:
         sequence: list[str],
     ) -> str:
         """Execute agents sequentially in a pipeline."""
-        if not sequence:
-            raise OrchestratorError("Sequence of agents cannot be empty.")
+        try:
+            if not sequence:
+                raise OrchestratorError("Sequence of agents cannot be empty.")
 
-        current_query = query
-        final_response = ""
+            if self.event_handler:
+                await self.event_handler.on_event(OrchestratorStartEvent(session_id, query))
 
-        for agent_name in sequence:
-            if agent_name not in self.agents:
-                raise OrchestratorError(f"Unknown agent in sequence: {agent_name}")
+            current_query = query
+            final_response = ""
+            for agent_name in sequence:
+                if agent_name not in self.agents:
+                    raise OrchestratorError(f"Unknown agent in sequence: {agent_name}")
 
-            agent = self.agents[agent_name]
-            history = await self.memory.get_history(session_id)
+                if self.event_handler:
+                    await self.event_handler.on_event(OrchestratorRouteEvent(session_id, current_query, agent_name))
 
-            try:
-                response = await agent.process(
-                    current_query, history, session_id=session_id, event_handler=self.event_handler
-                )
+                agent = self.agents[agent_name]
+                history = await self.memory.get_history(session_id)
 
-                # Append to history so next agent sees it
-                await self.memory.add_message(session_id, "user", current_query)
-                await self.memory.add_message(session_id, "model", f"[{agent_name} output]: {response}")
+                try:
+                    response = await agent.process(
+                        current_query, history, session_id=session_id, event_handler=self.event_handler
+                    )
 
-                # Output of current agent becomes input for next
-                current_query = (
-                    f"Here is the output from the previous step ({agent_name}). "
-                    f"Please continue the workflow: {response}"
-                )
-                final_response = response
+                    # Append to history so next agent sees it
+                    await self.memory.add_message(session_id, "user", current_query)
+                    await self.memory.add_message(session_id, "model", f"[{agent_name} output]: {response}")
 
-            except Exception as e:
-                logger.error("Error in chain at agent %s: %s", agent_name, e)
-                return f"Chain failed at {agent_name}: {e}"
+                    # Output of current agent becomes input for next
+                    current_query = (
+                        f"Here is the output from the previous step ({agent_name}). "
+                        f"Please continue the workflow: {response}"
+                    )
+                    final_response = response
 
-        return final_response
+                except Exception as e:
+                    logger.error("Error in chain at agent %s: %s", agent_name, e)
+                    if self.event_handler:
+                        await self.event_handler.on_event(OrchestratorErrorEvent(session_id, e))
+                    if self._config.propagate_errors:
+                        raise
+                    return f"Chain failed at {agent_name}: {e}"
+
+            if self.event_handler:
+                await self.event_handler.on_event(OrchestratorFinishEvent(session_id, final_response))
+
+            return final_response
+
+        except Exception as e:
+            if self.event_handler:
+                await self.event_handler.on_event(OrchestratorErrorEvent(session_id, e))
+            raise
 
     async def fan_out(
         self,
@@ -352,6 +385,9 @@ class Orchestrator:
         if unknown:
             raise OrchestratorError(f"Unknown agents: {unknown}")
 
+        if self.event_handler:
+            await self.event_handler.on_event(OrchestratorStartEvent(session_id, query))
+
         history = await self.memory.get_history(session_id)
         logger.info("[%s] Fan-out to %d agents: %s", trace_id, len(targets), targets)
 
@@ -366,7 +402,7 @@ class Orchestrator:
         async def _run_agent_inner(name: str) -> tuple[str, str]:
             try:
                 result = await self.agents[name].process(
-                    query, history, session_id=session_id, event_handler=self.event_handler
+                    query, list(history), session_id=session_id, event_handler=self.event_handler
                 )
                 return name, result
             except Exception as e:
@@ -378,7 +414,11 @@ class Orchestrator:
 
         await self.memory.add_message(session_id, "user", query)
         summary_parts = [f"[{name}]: {resp}" for name, resp in results.items()]
-        await self.memory.add_message(session_id, "model", "\n\n".join(summary_parts))
+        combined_response = "\n\n".join(summary_parts)
+        await self.memory.add_message(session_id, "model", combined_response)
+
+        if self.event_handler:
+            await self.event_handler.on_event(OrchestratorFinishEvent(session_id, combined_response))
 
         return results
 

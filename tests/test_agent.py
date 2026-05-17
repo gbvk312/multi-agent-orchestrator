@@ -975,3 +975,59 @@ async def test_resolve_prompt_utility():
         return "Async zero"
 
     assert await _resolve_prompt(async_zero, "test") == "Async zero"
+
+
+def test_base_agent_invalid_response_schema():
+    """Verify that BaseAgent raises AgentError for invalid response_schema type."""
+    from multi_agent_orchestrator.core.agent import AgentError, BaseAgent
+
+    with pytest.raises(AgentError, match="response_schema must be a dict or type"):
+        BaseAgent(name="InvalidSchemaAgent", system_prompt="Prompt", response_schema="not-a-dict-or-type")
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_post_process_streaming(mock_client_class):
+    """Verify post_process is called on the final collected text during streaming."""
+    from collections.abc import AsyncGenerator
+
+    from multi_agent_orchestrator.core.agent import BaseAgent
+    from multi_agent_orchestrator.core.events import AgentFinishEvent
+
+    mock_client = mock_client_class.return_value
+
+    class MockChunk:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.function_calls = None
+            self.candidates = None
+
+    async def mock_stream_generator() -> AsyncGenerator[MockChunk, None]:
+        yield MockChunk(text="Streamed chunk")
+
+    mock_client.aio.models.generate_content_stream = AsyncMock(
+        side_effect=lambda *args, **kwargs: mock_stream_generator()
+    )
+
+    class CustomPostProcessAgent(BaseAgent):
+        async def post_process(self, response: str) -> str:
+            return f"PROCESSED: {response}"
+
+    agent = CustomPostProcessAgent(name="CustomAgent", system_prompt="Prompt")
+
+    mock_handler = MagicMock()
+    mock_handler.on_event = AsyncMock()
+
+    chunks = []
+    async for chunk in agent.process_stream("query", [], event_handler=mock_handler):
+        chunks.append(chunk)
+
+    # In process_stream, the yielded chunks are raw generated chunks,
+    # but the finish event should carry the post-processed collected text.
+    assert chunks == ["Streamed chunk"]
+
+    # Verify AgentFinishEvent carries the post-processed value
+    assert mock_handler.on_event.call_count == 2
+    event = mock_handler.on_event.call_args_list[1][0][0]
+    assert isinstance(event, AgentFinishEvent)
+    assert event.response == "PROCESSED: Streamed chunk"
