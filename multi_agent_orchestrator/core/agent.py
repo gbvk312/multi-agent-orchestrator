@@ -107,6 +107,11 @@ class BaseAgent:
         except TimeoutError as exc:
             raise AgentError(f"[{self.name}] Processing timed out after {self.timeout}s") from exc
 
+
+    async def _await_with_timeout(self, awaitable: Any) -> Any:
+        """Apply per-operation timeout to upstream await points."""
+        async with asyncio.timeout(self.timeout):
+            return await awaitable
     async def _process_inner(
         self,
         query: str,
@@ -149,12 +154,12 @@ class BaseAgent:
             for call in response.function_calls:
                 if event_handler and call.name:
                     args_dict = dict(call.args) if call.args else {}
-                    await event_handler.on_event(ToolCallEvent(session_id, self.name, call.name, args_dict))
+                    await self._await_with_timeout(event_handler.on_event(ToolCallEvent(session_id, self.name, call.name, args_dict)))
 
-                result = await self._execute_tool(call)
+                result = await self._await_with_timeout(self._execute_tool(call))
 
                 if event_handler and call.name:
-                    await event_handler.on_event(ToolResultEvent(session_id, self.name, call.name, result))
+                    await self._await_with_timeout(event_handler.on_event(ToolResultEvent(session_id, self.name, call.name, result)))
 
                 tool_results.append(result)
 
@@ -179,38 +184,45 @@ class BaseAgent:
         event_handler: EventHandler | None = None,
     ) -> AsyncGenerator[str, None]:
         try:
-            async with asyncio.timeout(self.timeout):
-                if event_handler:
-                    await event_handler.on_event(AgentStartEvent(session_id, self.name, query))
+            if event_handler:
+                await self._await_with_timeout(event_handler.on_event(AgentStartEvent(session_id, self.name, query)))
 
-                contents = []
-                for msg in history:
-                    role = "user" if msg["role"] == "user" else "model"
-                    contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
-                contents.append(types.Content(role="user", parts=[types.Part.from_text(text=query)]))
+            contents = []
+            for msg in history:
+                role = "user" if msg["role"] == "user" else "model"
+                contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
+            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=query)]))
 
-                kwargs: dict[str, Any] = {
-                    "system_instruction": self.system_prompt,
-                    "tools": self.tools if self.tools else None,
-                    "temperature": self.temperature,
-                }
-                if self.response_schema is not None:
-                    kwargs["response_mime_type"] = "application/json"
-                    kwargs["response_schema"] = self.response_schema
-                config = types.GenerateContentConfig(**kwargs)
+            kwargs: dict[str, Any] = {
+                "system_instruction": self.system_prompt,
+                "tools": self.tools if self.tools else None,
+                "temperature": self.temperature,
+            }
+            if self.response_schema is not None:
+                kwargs["response_mime_type"] = "application/json"
+                kwargs["response_schema"] = self.response_schema
+            config = types.GenerateContentConfig(**kwargs)
 
-                for _round_num in range(self.max_tool_rounds):
-                    response_stream = await self.client.aio.models.generate_content_stream(
-                        model=self.model,
-                        contents=contents,
-                        config=config,
+            for _round_num in range(self.max_tool_rounds):
+                    response_stream = await self._await_with_timeout(
+                        self.client.aio.models.generate_content_stream(
+                            model=self.model,
+                            contents=contents,
+                            config=config,
+                        )
                     )
 
                     collected_text = ""
                     function_calls = []
                     candidates_content = None
 
-                    async for chunk in response_stream:
+                    stream_iter = response_stream.__aiter__()
+                    while True:
+                        try:
+                            chunk = await self._await_with_timeout(stream_iter.__anext__())
+                        except StopAsyncIteration:
+                            break
+
                         if chunk.text:
                             yield chunk.text
                             collected_text += chunk.text
@@ -228,19 +240,19 @@ class BaseAgent:
 
                     if not function_calls:
                         if event_handler:
-                            await event_handler.on_event(AgentFinishEvent(session_id, self.name, collected_text))
+                            await self._await_with_timeout(event_handler.on_event(AgentFinishEvent(session_id, self.name, collected_text)))
                         return
 
                     tool_results = []
                     for call in function_calls:
                         if event_handler and call.name:
                             args_dict = dict(call.args) if call.args else {}
-                            await event_handler.on_event(ToolCallEvent(session_id, self.name, call.name, args_dict))
+                            await self._await_with_timeout(event_handler.on_event(ToolCallEvent(session_id, self.name, call.name, args_dict)))
 
-                        result = await self._execute_tool(call)
+                        result = await self._await_with_timeout(self._execute_tool(call))
 
                         if event_handler and call.name:
-                            await event_handler.on_event(ToolResultEvent(session_id, self.name, call.name, result))
+                            await self._await_with_timeout(event_handler.on_event(ToolResultEvent(session_id, self.name, call.name, result)))
                         tool_results.append(result)
 
                     if candidates_content:
@@ -254,7 +266,7 @@ class BaseAgent:
                             )
                     contents.append(types.Content(role="user", parts=fn_response_parts))
 
-                yield f"[{self.name}] Reached maximum tool execution rounds ({self.max_tool_rounds})."
+            yield f"[{self.name}] Reached maximum tool execution rounds ({self.max_tool_rounds})."
         except TimeoutError as exc:
             raise AgentError(f"[{self.name}] Streaming timed out after {self.timeout}s") from exc
 

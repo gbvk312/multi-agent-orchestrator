@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 
 from multi_agent_orchestrator.core.memory import InMemoryBackend, MemoryManager
@@ -196,3 +197,31 @@ async def test_memory_manager_locks_eviction():
     # The s0..s1001 locks should be pruned, leaving only the "new_session" lock
     assert len(memory._locks) == 1
     assert "new_session" in memory._locks
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_lock_eviction_preserves_waiters():
+    """Locks with queued waiters should not be pruned as idle."""
+    memory = MemoryManager()
+
+    keep_lock = asyncio.Lock()
+    await keep_lock.acquire()
+
+    async def waiting_task() -> None:
+        async with keep_lock:
+            return None
+
+    waiter = asyncio.create_task(waiting_task())
+    await asyncio.sleep(0)
+    keep_lock.release()
+
+    # During this handoff window, lock may be unlocked but still have waiters.
+    for i in range(1002):
+        memory._locks[f"s{i}"] = asyncio.Lock()
+    memory._locks["session_with_waiter"] = keep_lock
+
+    memory._get_lock("new_session")
+
+    assert "session_with_waiter" in memory._locks
+
+    await waiter
