@@ -3,6 +3,7 @@ from typing import Any
 
 class OrchestratorEvent:
     """Base class for all orchestrator events."""
+
     pass
 
 
@@ -38,7 +39,7 @@ class ToolResultEvent(OrchestratorEvent):
 
 class EventHandler:
     """Base class for handling orchestrator events."""
-    
+
     async def on_event(self, event: OrchestratorEvent) -> None:
         """Handle an incoming event."""
         if isinstance(event, AgentStartEvent):

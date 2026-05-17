@@ -63,7 +63,7 @@ class Orchestrator:
         routing_prompt = (
             "You are a routing supervisor. Based on the user's query, "
             "you must decide which agent is best suited to handle the request.\n\n"
-            f"Available agents:\n{agent_descriptions}\n\nUser Query: \"{query}\""
+            f'Available agents:\n{agent_descriptions}\n\nUser Query: "{query}"'
         )
         schema = types.Schema(type=types.Type.STRING, enum=agent_names)
         try:
@@ -95,7 +95,7 @@ class Orchestrator:
         target_agent_name = await self._route_request(query)
         current_query = query
         history = await self.memory.get_history(session_id)
-        
+
         final_response_text = ""
 
         # Loop to handle agent handoffs
@@ -109,14 +109,11 @@ class Orchestrator:
 
             try:
                 response_text = await target_agent.process(
-                    current_query, 
-                    history, 
-                    session_id=session_id, 
-                    event_handler=self.event_handler
+                    current_query, history, session_id=session_id, event_handler=self.event_handler
                 )
                 final_response_text += response_text
                 break  # Done processing
-                
+
             except AgentHandoff as handoff:
                 logger.info("[%s] Agent %s handing off to %s", trace_id, target_agent_name, handoff.target_agent)
                 if handoff.message:
@@ -125,14 +122,14 @@ class Orchestrator:
                     )
                     current_query = handoff.message
                 target_agent_name = handoff.target_agent
-                
+
             except HumanApprovalRequired as approval:
                 final_response_text = (
                     f"Execution paused. Human approval required for tool '{approval.tool_name}' "
                     f"with args {approval.tool_args}. Message: {approval.message}"
                 )
                 break
-                
+
             except AgentError as e:
                 final_response_text = f"Error from {target_agent_name}: {e}"
                 logger.error("[%s] %s", trace_id, final_response_text)
@@ -151,7 +148,7 @@ class Orchestrator:
         target_agent_name = await self._route_request(query)
         current_query = query
         history = await self.memory.get_history(session_id)
-        
+
         final_response_text = ""
 
         while True:
@@ -166,15 +163,12 @@ class Orchestrator:
 
             try:
                 async for chunk in target_agent.process_stream(
-                    current_query, 
-                    history, 
-                    session_id=session_id, 
-                    event_handler=self.event_handler
+                    current_query, history, session_id=session_id, event_handler=self.event_handler
                 ):
                     yield chunk
                     final_response_text += chunk
                 break
-                
+
             except AgentHandoff as handoff:
                 logger.info("[%s] Agent %s handing off to %s", trace_id, target_agent_name, handoff.target_agent)
                 if handoff.message:
@@ -183,7 +177,7 @@ class Orchestrator:
                     )
                     current_query = handoff.message
                 target_agent_name = handoff.target_agent
-                
+
             except HumanApprovalRequired as approval:
                 msg = (
                     f"\nExecution paused. Human approval required for tool "
@@ -192,7 +186,7 @@ class Orchestrator:
                 yield msg
                 final_response_text += msg
                 break
-                
+
             except AgentError as e:
                 msg = f"\nError from {target_agent_name}: {e}"
                 yield msg
@@ -212,40 +206,37 @@ class Orchestrator:
         """Execute agents sequentially in a pipeline."""
         if not sequence:
             raise OrchestratorError("Sequence of agents cannot be empty.")
-            
+
         current_query = query
         final_response = ""
-        
+
         for agent_name in sequence:
             if agent_name not in self.agents:
                 raise OrchestratorError(f"Unknown agent in sequence: {agent_name}")
-                
+
             agent = self.agents[agent_name]
             history = await self.memory.get_history(session_id)
-            
+
             try:
                 response = await agent.process(
-                    current_query, 
-                    history, 
-                    session_id=session_id, 
-                    event_handler=self.event_handler
+                    current_query, history, session_id=session_id, event_handler=self.event_handler
                 )
-                
+
                 # Append to history so next agent sees it
                 await self.memory.add_message(session_id, "user", current_query)
                 await self.memory.add_message(session_id, "model", f"[{agent_name} output]: {response}")
-                
+
                 # Output of current agent becomes input for next
                 current_query = (
                     f"Here is the output from the previous step ({agent_name}). "
                     f"Please continue the workflow: {response}"
                 )
                 final_response = response
-                
+
             except Exception as e:
                 logger.error("Error in chain at agent %s: %s", agent_name, e)
                 return f"Chain failed at {agent_name}: {e}"
-                
+
         return final_response
 
     async def fan_out(
@@ -267,10 +258,7 @@ class Orchestrator:
         async def _run_agent(name: str) -> tuple[str, str]:
             try:
                 result = await self.agents[name].process(
-                    query, 
-                    history, 
-                    session_id=session_id, 
-                    event_handler=self.event_handler
+                    query, history, session_id=session_id, event_handler=self.event_handler
                 )
                 return name, result
             except AgentError as e:

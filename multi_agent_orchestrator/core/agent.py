@@ -19,6 +19,7 @@ class AgentError(Exception):
 
 class AgentHandoff(Exception):
     """Raised by a tool to transfer control to another agent."""
+
     def __init__(self, target_agent: str, message: str = ""):
         self.target_agent = target_agent
         self.message = message
@@ -26,6 +27,7 @@ class AgentHandoff(Exception):
 
 class HumanApprovalRequired(Exception):
     """Raised by a tool to pause execution for human approval."""
+
     def __init__(self, tool_name: str, tool_args: dict[str, Any], message: str = ""):
         self.tool_name = tool_name
         self.tool_args = tool_args
@@ -135,7 +137,7 @@ class BaseAgent:
 
                 if event_handler and call.name:
                     await event_handler.on_event(ToolResultEvent(session_id, self.name, call.name, result))
-                
+
                 tool_results.append(result)
 
             if response.candidates and response.candidates[0].content:
@@ -194,7 +196,7 @@ class BaseAgent:
                     collected_text += chunk.text
                 if chunk.function_calls:
                     function_calls.extend(chunk.function_calls)
-                
+
                 if chunk.candidates and chunk.candidates[0].content:
                     if not candidates_content:
                         candidates_content = chunk.candidates[0].content
