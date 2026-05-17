@@ -166,7 +166,7 @@ async def test_process_request(mock_client_class):
 
     assert response == "Agent response"
     # Agent receives empty history (no double-query bug)
-    mock_agent.process.assert_called_once_with("User query", [])
+    mock_agent.process.assert_called_once_with("User query", [], session_id="session_1", event_handler=None)
 
     # Verify memory was updated AFTER processing
     history = await orchestrator.memory.get_history("session_1")

@@ -44,4 +44,6 @@ async def test_redis_backend_delete(mock_redis):
     backend = RedisMemoryBackend()
 
     await backend.delete("session3")
-    mock_redis.delete.assert_called_once_with("mao:session:session3")
+    assert mock_redis.delete.call_count == 2
+    mock_redis.delete.assert_any_call("mao:session:session3")
+    mock_redis.delete.assert_any_call("mao:session:session3:state")
