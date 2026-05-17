@@ -1031,3 +1031,94 @@ async def test_base_agent_post_process_streaming(mock_client_class):
     event = mock_handler.on_event.call_args_list[1][0][0]
     assert isinstance(event, AgentFinishEvent)
     assert event.response == "PROCESSED: Streamed chunk"
+
+
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+def test_base_agent_metadata(mock_client):
+    """Verify that BaseAgent accepts and stores custom metadata."""
+    metadata = {"key1": "value1", "key2": 42}
+    agent = BaseAgent(
+        name="MetaAgent",
+        system_prompt="Prompt",
+        metadata=metadata,
+    )
+    assert agent.metadata == metadata
+
+    agent_no_meta = BaseAgent(
+        name="NoMetaAgent",
+        system_prompt="Prompt",
+    )
+    assert agent_no_meta.metadata == {}
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_tool_dependency_injection(mock_client_class):
+    """Verify that tool execution correctly injects session_id, memory, and context when requested by the signature."""
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+
+    # Define tools with various signatures
+    injected_args: dict[str, Any] = {}
+
+    def sync_tool_no_di(x: int) -> str:
+        return f"sync-no-di: {x}"
+
+    async def async_tool_with_di(x: int, session_id: str, memory: Any, context: dict[str, Any]) -> str:
+        injected_args["session_id"] = session_id
+        injected_args["memory"] = memory
+        injected_args["context"] = context
+        return f"async-di: {x}"
+
+    # First call requests sync_tool_no_di
+    mock_call_1 = MagicMock()
+    mock_call_1.name = "sync_tool_no_di"
+    mock_call_1.args = {"x": 10}
+
+    mock_resp_1 = MagicMock()
+    mock_resp_1.function_calls = [mock_call_1]
+    mock_resp_1.candidates = [MagicMock()]
+    mock_resp_1.candidates[0].content = types.Content(role="model", parts=[])
+
+    # Second call requests async_tool_with_di
+    mock_call_2 = MagicMock()
+    mock_call_2.name = "async_tool_with_di"
+    mock_call_2.args = {"x": 20}
+
+    mock_resp_2 = MagicMock()
+    mock_resp_2.function_calls = [mock_call_2]
+    mock_resp_2.candidates = [MagicMock()]
+    mock_resp_2.candidates[0].content = types.Content(role="model", parts=[])
+
+    # Third call returns final response
+    mock_resp_final = MagicMock()
+    mock_resp_final.function_calls = None
+    mock_resp_final.text = "Finished"
+
+    mock_client.aio.models.generate_content.side_effect = [
+        mock_resp_1,
+        mock_resp_2,
+        mock_resp_final,
+    ]
+
+    agent = BaseAgent(
+        name="DIAgent",
+        system_prompt="Prompt",
+        tools=[sync_tool_no_di, async_tool_with_di],
+    )
+
+    dummy_memory = MagicMock()
+    dummy_context = {"user_id": 123}
+
+    res = await agent.process(
+        "query",
+        history=[],
+        session_id="session-xyz",
+        memory=dummy_memory,
+        context=dummy_context,
+    )
+
+    assert res == "Finished"
+    assert injected_args["session_id"] == "session-xyz"
+    assert injected_args["memory"] is dummy_memory
+    assert injected_args["context"] is dummy_context

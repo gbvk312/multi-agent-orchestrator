@@ -174,7 +174,14 @@ async def test_process_request(mock_client_class):
 
     assert response == "Agent response"
     # Agent receives empty history (no double-query bug)
-    mock_agent.process.assert_called_once_with("User query", [], session_id="session_1", event_handler=None)
+    mock_agent.process.assert_called_once_with(
+        "User query",
+        [],
+        session_id="session_1",
+        event_handler=None,
+        memory=orchestrator.memory,
+        context=None,
+    )
 
     # Verify memory was updated AFTER processing
     history = await orchestrator.memory.get_history("session_1")
@@ -338,7 +345,14 @@ async def test_orchestrator_handoff_in_processing(mock_client_class):
     assert response == "Final Answer from B"
     agent_a.process.assert_called_once()
     # Agent B should be called with the handoff message
-    agent_b.process.assert_called_once_with("transfer payload", ANY, session_id="s1", event_handler=None)
+    agent_b.process.assert_called_once_with(
+        "transfer payload",
+        ANY,
+        session_id="s1",
+        event_handler=None,
+        memory=orchestrator.memory,
+        context=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -1155,3 +1169,110 @@ async def test_orchestrator_fan_out_events():
     events = [call[0][0] for call in handler.on_event.call_args_list]
     assert any(isinstance(e, OrchestratorStartEvent) for e in events)
     assert any(isinstance(e, OrchestratorFinishEvent) for e in events)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_pre_post_process_hooks(mock_client_class):
+    """Verify that Orchestrator pre_process and post_process hooks globally transform query and response."""
+
+    class HookedOrchestrator(Orchestrator):
+        async def pre_process(self, query: str) -> str:
+            return f"HOOKED_PRE: {query}"
+
+        async def post_process(self, response: str) -> str:
+            return f"HOOKED_POST: {response}"
+
+    orchestrator = HookedOrchestrator()
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(return_value="AgentA Result")
+
+    async def mock_stream_a(*args, **kwargs):
+        yield "Chunk 1"
+
+    agent_a.process_stream = mock_stream_a
+    orchestrator.register_agent(agent_a)
+
+    # 1. process_request
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        res = await orchestrator.process_request("s1", "Query")
+        assert res == "HOOKED_POST: AgentA Result"
+        agent_a.process.assert_called_with(
+            "HOOKED_PRE: Query",
+            [],
+            session_id="s1",
+            event_handler=None,
+            memory=orchestrator.memory,
+            context=None,
+        )
+
+    # 2. process_request_stream
+    agent_a.process.reset_mock()
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        chunks = []
+        async for chunk in orchestrator.process_request_stream("s2", "Query"):
+            chunks.append(chunk)
+        # Note: Chunks yielded are raw, but final stored memory/finish event carries post-processed
+        assert chunks == ["Chunk 1"]
+        # Verify the memory has post-processed model reply
+        history = await orchestrator.memory.get_history("s2")
+        assert history[-1]["content"] == "HOOKED_POST: Chunk 1"
+        assert history[-2]["content"] == "HOOKED_PRE: Query"
+
+    # 3. chain
+    agent_a.process.reset_mock()
+    chain_res = await orchestrator.chain("s3", "Query", ["AgentA"])
+    assert chain_res == "HOOKED_POST: AgentA Result"
+
+    # 4. fan_out
+    agent_a.process.reset_mock()
+    fan_res = await orchestrator.fan_out("s4", "Query", ["AgentA"])
+    assert fan_res == {"AgentA": "AgentA Result"}
+    # Fan out memory holds combined post-processed response
+    history_fan = await orchestrator.memory.get_history("s4")
+    assert history_fan[-1]["content"] == "HOOKED_POST: [AgentA]: AgentA Result"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_context_propagation():
+    """Verify that context is successfully propagated to agents in all Orchestrator runner methods."""
+    orchestrator = Orchestrator()
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(return_value="Ok")
+
+    async def mock_stream_a(*args, **kwargs):
+        yield "Chunk"
+
+    agent_a.process_stream = mock_stream_a
+    orchestrator.register_agent(agent_a)
+
+    test_context = {"user_metadata": "admin", "request_id": 999}
+
+    # 1. process_request
+    agent_a.process.reset_mock()
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        await orchestrator.process_request("s1", "Query", context=test_context)
+        agent_a.process.assert_called_with(
+            "Query",
+            [],
+            session_id="s1",
+            event_handler=None,
+            memory=orchestrator.memory,
+            context=test_context,
+        )
+
+    # 2. chain
+    agent_a.process.reset_mock()
+    await orchestrator.chain("s2", "Query", ["AgentA"], context=test_context)
+    agent_a.process.assert_called_with(
+        "Query",
+        [],
+        session_id="s2",
+        event_handler=None,
+        memory=orchestrator.memory,
+        context=test_context,
+    )

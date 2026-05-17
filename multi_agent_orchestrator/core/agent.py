@@ -96,6 +96,7 @@ class BaseAgent:
         response_schema: Any | None = None,
         config: OrchestratorConfig | None = None,
         executor: concurrent.futures.Executor | None = None,
+        metadata: dict[str, Any] | None = None,
     ):
         self._config = config or OrchestratorConfig.from_env()
 
@@ -111,6 +112,7 @@ class BaseAgent:
             raise AgentError(f"response_schema must be a dict or type, got {type(response_schema).__name__}")
         self.response_schema = response_schema
         self.executor = executor
+        self.metadata = metadata or {}
 
         self._tool_map: dict[str, Callable[..., Any]] = {fn.__name__: fn for fn in self.tools}
 
@@ -134,10 +136,12 @@ class BaseAgent:
         history: list[dict[str, Any]],
         session_id: str = "",
         event_handler: EventHandler | None = None,
+        memory: Any | None = None,
+        context: dict[str, Any] | None = None,
     ) -> str:
         try:
             async with asyncio.timeout(self.timeout):
-                return await self._process_inner(query, history, session_id, event_handler)
+                return await self._process_inner(query, history, session_id, event_handler, memory, context)
         except TimeoutError as exc:
             raise AgentError(f"[{self.name}] Processing timed out after {self.timeout}s") from exc
 
@@ -152,6 +156,8 @@ class BaseAgent:
         history: list[dict[str, Any]],
         session_id: str,
         event_handler: EventHandler | None,
+        memory: Any | None = None,
+        context: dict[str, Any] | None = None,
     ) -> str:
         query = await self.pre_process(query, history)
 
@@ -195,7 +201,7 @@ class BaseAgent:
                     event_call = ToolCallEvent(session_id, self.name, call.name, args_dict)
                     await self._await_with_timeout(event_handler.on_event(event_call))
 
-                result = await self._await_with_timeout(self._execute_tool(call))
+                result = await self._await_with_timeout(self._execute_tool(call, session_id, memory, context))
 
                 if event_handler and call.name:
                     event_result = ToolResultEvent(session_id, self.name, call.name, result)
@@ -222,6 +228,8 @@ class BaseAgent:
         history: list[dict[str, Any]],
         session_id: str = "",
         event_handler: EventHandler | None = None,
+        memory: Any | None = None,
+        context: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str, None]:
         try:
             query = await self.pre_process(query, history)
@@ -297,7 +305,7 @@ class BaseAgent:
                         event_call = ToolCallEvent(session_id, self.name, call.name, args_dict)
                         await self._await_with_timeout(event_handler.on_event(event_call))
 
-                    result = await self._await_with_timeout(self._execute_tool(call))
+                    result = await self._await_with_timeout(self._execute_tool(call, session_id, memory, context))
 
                     if event_handler and call.name:
                         event_result = ToolResultEvent(session_id, self.name, call.name, result)
@@ -345,7 +353,13 @@ class BaseAgent:
 
         raise AgentError(f"[{self.name}] All {self.max_retries} retries exhausted.") from last_error
 
-    async def _execute_tool(self, call: types.FunctionCall) -> str:
+    async def _execute_tool(
+        self,
+        call: types.FunctionCall,
+        session_id: str = "",
+        memory: Any | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> str:
         if not call.name:
             return "Error: Unknown tool call without a name."
 
@@ -355,6 +369,14 @@ class BaseAgent:
 
         try:
             args = dict(call.args) if call.args else {}
+            sig = inspect.signature(tool_fn)
+            if "session_id" in sig.parameters:
+                args["session_id"] = session_id
+            if "memory" in sig.parameters:
+                args["memory"] = memory
+            if "context" in sig.parameters:
+                args["context"] = context
+
             if _is_async_callable(tool_fn):
                 result = await tool_fn(**args)
             else:
