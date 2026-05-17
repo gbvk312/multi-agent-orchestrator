@@ -9,7 +9,14 @@ from google.genai import types
 
 from .agent import AgentError, AgentHandoff, BaseAgent, HumanApprovalRequired
 from .config import OrchestratorConfig
-from .events import EventHandler
+from .events import (
+    EventHandler,
+    OrchestratorErrorEvent,
+    OrchestratorFinishEvent,
+    OrchestratorHandoffEvent,
+    OrchestratorRouteEvent,
+    OrchestratorStartEvent,
+)
 from .memory import MemoryManager
 
 logger = logging.getLogger(__name__)
@@ -99,110 +106,158 @@ class Orchestrator:
         trace_id = uuid.uuid4().hex[:12]
         logger.info("[%s] Processing request for session=%s", trace_id, session_id)
 
-        target_agent_name = await self._route_request(query)
-        current_query = query
-        history = await self.memory.get_history(session_id)
+        if self.event_handler:
+            await self.event_handler.on_event(OrchestratorStartEvent(session_id, query))
 
-        final_response_text = ""
+        try:
+            target_agent_name = await self._route_request(query)
+            if self.event_handler:
+                await self.event_handler.on_event(OrchestratorRouteEvent(session_id, query, target_agent_name))
 
-        # Loop to handle agent handoffs
-        while True:
-            target_agent = self.agents.get(target_agent_name)
-            if not target_agent:
-                final_response_text = f"Error: Agent '{target_agent_name}' not found."
-                break
+            current_query = query
+            history = await self.memory.get_history(session_id)
 
-            logger.info("[%s] Routing to -> %s", trace_id, target_agent_name)
+            final_response_text = ""
 
-            try:
-                response_text = await target_agent.process(
-                    current_query, history, session_id=session_id, event_handler=self.event_handler
-                )
-                final_response_text += response_text
-                break  # Done processing
+            # Loop to handle agent handoffs
+            while True:
+                target_agent = self.agents.get(target_agent_name)
+                if not target_agent:
+                    final_response_text = f"Error: Agent '{target_agent_name}' not found."
+                    break
 
-            except AgentHandoff as handoff:
-                logger.info("[%s] Agent %s handing off to %s", trace_id, target_agent_name, handoff.target_agent)
-                if handoff.message:
-                    history.append(
-                        {"role": "model", "content": f"Handing off to {handoff.target_agent}: {handoff.message}"}
+                logger.info("[%s] Routing to -> %s", trace_id, target_agent_name)
+
+                try:
+                    response_text = await target_agent.process(
+                        current_query, history, session_id=session_id, event_handler=self.event_handler
                     )
-                    current_query = handoff.message
-                target_agent_name = handoff.target_agent
+                    final_response_text += response_text
+                    break  # Done processing
 
-            except HumanApprovalRequired as approval:
-                final_response_text = (
-                    f"Execution paused. Human approval required for tool '{approval.tool_name}' "
-                    f"with args {approval.tool_args}. Message: {approval.message}"
-                )
-                break
+                except AgentHandoff as handoff:
+                    logger.info("[%s] Agent %s handing off to %s", trace_id, target_agent_name, handoff.target_agent)
+                    if self.event_handler:
+                        await self.event_handler.on_event(
+                            OrchestratorHandoffEvent(
+                                session_id,
+                                source_agent=target_agent_name,
+                                target_agent=handoff.target_agent,
+                                message=handoff.message,
+                            )
+                        )
+                    if handoff.message:
+                        history.append(
+                            {"role": "model", "content": f"Handing off to {handoff.target_agent}: {handoff.message}"}
+                        )
+                        current_query = handoff.message
+                    target_agent_name = handoff.target_agent
 
-            except AgentError as e:
-                final_response_text = f"Error from {target_agent_name}: {e}"
-                logger.error("[%s] %s", trace_id, final_response_text)
-                break
+                except HumanApprovalRequired as approval:
+                    final_response_text = (
+                        f"Execution paused. Human approval required for tool '{approval.tool_name}' "
+                        f"with args {approval.tool_args}. Message: {approval.message}"
+                    )
+                    break
 
-        await self.memory.add_message(session_id, "user", query)
-        await self.memory.add_message(session_id, "model", final_response_text)
+                except AgentError as e:
+                    final_response_text = f"Error from {target_agent_name}: {e}"
+                    logger.error("[%s] %s", trace_id, final_response_text)
+                    break
 
-        return final_response_text
+            await self.memory.add_message(session_id, "user", query)
+            await self.memory.add_message(session_id, "model", final_response_text)
+
+            if self.event_handler:
+                await self.event_handler.on_event(OrchestratorFinishEvent(session_id, final_response_text))
+
+            return final_response_text
+
+        except Exception as e:
+            if self.event_handler:
+                await self.event_handler.on_event(OrchestratorErrorEvent(session_id, e))
+            raise
 
     async def process_request_stream(self, session_id: str, query: str) -> AsyncGenerator[str, None]:
         """Processes a user request and streams the response."""
         trace_id = uuid.uuid4().hex[:12]
         logger.info("[%s] Streaming request for session=%s", trace_id, session_id)
 
-        target_agent_name = await self._route_request(query)
-        current_query = query
-        history = await self.memory.get_history(session_id)
+        if self.event_handler:
+            await self.event_handler.on_event(OrchestratorStartEvent(session_id, query))
 
-        final_response_text = ""
+        try:
+            target_agent_name = await self._route_request(query)
+            if self.event_handler:
+                await self.event_handler.on_event(OrchestratorRouteEvent(session_id, query, target_agent_name))
 
-        while True:
-            target_agent = self.agents.get(target_agent_name)
-            if not target_agent:
-                err_msg = f"Error: Agent '{target_agent_name}' not found."
-                yield err_msg
-                final_response_text += err_msg
-                break
+            current_query = query
+            history = await self.memory.get_history(session_id)
 
-            logger.info("[%s] Routing to -> %s", trace_id, target_agent_name)
+            final_response_text = ""
 
-            try:
-                async for chunk in target_agent.process_stream(
-                    current_query, history, session_id=session_id, event_handler=self.event_handler
-                ):
-                    yield chunk
-                    final_response_text += chunk
-                break
+            while True:
+                target_agent = self.agents.get(target_agent_name)
+                if not target_agent:
+                    err_msg = f"Error: Agent '{target_agent_name}' not found."
+                    yield err_msg
+                    final_response_text += err_msg
+                    break
 
-            except AgentHandoff as handoff:
-                logger.info("[%s] Agent %s handing off to %s", trace_id, target_agent_name, handoff.target_agent)
-                if handoff.message:
-                    history.append(
-                        {"role": "model", "content": f"Handing off to {handoff.target_agent}: {handoff.message}"}
+                logger.info("[%s] Routing to -> %s", trace_id, target_agent_name)
+
+                try:
+                    async for chunk in target_agent.process_stream(
+                        current_query, history, session_id=session_id, event_handler=self.event_handler
+                    ):
+                        yield chunk
+                        final_response_text += chunk
+                    break
+
+                except AgentHandoff as handoff:
+                    logger.info("[%s] Agent %s handing off to %s", trace_id, target_agent_name, handoff.target_agent)
+                    if self.event_handler:
+                        await self.event_handler.on_event(
+                            OrchestratorHandoffEvent(
+                                session_id,
+                                source_agent=target_agent_name,
+                                target_agent=handoff.target_agent,
+                                message=handoff.message,
+                            )
+                        )
+                    if handoff.message:
+                        history.append(
+                            {"role": "model", "content": f"Handing off to {handoff.target_agent}: {handoff.message}"}
+                        )
+                        current_query = handoff.message
+                    target_agent_name = handoff.target_agent
+
+                except HumanApprovalRequired as approval:
+                    msg = (
+                        f"\nExecution paused. Human approval required for tool "
+                        f"'{approval.tool_name}'. Message: {approval.message}"
                     )
-                    current_query = handoff.message
-                target_agent_name = handoff.target_agent
+                    yield msg
+                    final_response_text += msg
+                    break
 
-            except HumanApprovalRequired as approval:
-                msg = (
-                    f"\nExecution paused. Human approval required for tool "
-                    f"'{approval.tool_name}'. Message: {approval.message}"
-                )
-                yield msg
-                final_response_text += msg
-                break
+                except AgentError as e:
+                    msg = f"\nError from {target_agent_name}: {e}"
+                    yield msg
+                    final_response_text += msg
+                    logger.error("[%s] %s", trace_id, msg)
+                    break
 
-            except AgentError as e:
-                msg = f"\nError from {target_agent_name}: {e}"
-                yield msg
-                final_response_text += msg
-                logger.error("[%s] %s", trace_id, msg)
-                break
+            await self.memory.add_message(session_id, "user", query)
+            await self.memory.add_message(session_id, "model", final_response_text)
 
-        await self.memory.add_message(session_id, "user", query)
-        await self.memory.add_message(session_id, "model", final_response_text)
+            if self.event_handler:
+                await self.event_handler.on_event(OrchestratorFinishEvent(session_id, final_response_text))
+
+        except Exception as e:
+            if self.event_handler:
+                await self.event_handler.on_event(OrchestratorErrorEvent(session_id, e))
+            raise
 
     async def chain(
         self,

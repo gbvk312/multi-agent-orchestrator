@@ -90,3 +90,14 @@ async def test_redis_backend_close(mock_redis):
     backend = RedisMemoryBackend()
     await backend.close()
     mock_redis.aclose.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_redis_backend_custom_client():
+    custom_client = AsyncMock()
+    backend = RedisMemoryBackend(redis_client=custom_client)
+    assert backend._redis == custom_client
+    assert backend._owns_client is False
+
+    await backend.close()
+    custom_client.aclose.assert_not_called()
