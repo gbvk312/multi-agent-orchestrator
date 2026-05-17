@@ -28,9 +28,17 @@ dist/
 .ruff_cache/
 .mypy_cache/
 .coverage
+coverage.xml
 htmlcov/
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
+
 # MacOS
 .DS_Store
 
 # MkDocs
 site/
+

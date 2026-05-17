@@ -98,6 +98,56 @@ async def main():
 asyncio.run(main())
 ```
 
+## Advanced Storage and Pluggable Memory
+
+Swap memory storage backends seamlessly to scale.
+
+### Redis Memory Backend (with Custom Client support)
+You can inject a pre-configured or shared `redis.Redis` client to safely integrate with FastAPI or serverless application pools. This ensures that the orchestrator uses your active connection pool without closing it prematurely when `.close()` is called:
+
+```python
+import redis.asyncio as redis
+from multi_agent_orchestrator.core import RedisMemoryBackend
+
+# Pre-configured shared pool client
+custom_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+backend = RedisMemoryBackend(redis_client=custom_client)
+```
+
+## Observability & Event System
+
+The framework features a built-in event tracing system. You can inherit from `EventHandler` to intercept orchestrator-level and agent-level transitions.
+
+```python
+from multi_agent_orchestrator import (
+    EventHandler,
+    OrchestratorStartEvent,
+    OrchestratorFinishEvent,
+    AgentStartEvent,
+    Orchestrator
+)
+
+class MyTraceHandler(EventHandler):
+    async def on_orchestrator_start(self, event: OrchestratorStartEvent) -> None:
+        print(f"🚀 Processing started for session: {event.session_id}")
+
+    async def on_agent_start(self, event: AgentStartEvent) -> None:
+        print(f"🤖 Delegate agent activated: {event.agent_name}")
+
+    async def on_orchestrator_finish(self, event: OrchestratorFinishEvent) -> None:
+        print(f"✅ Finished! Response length: {len(event.response)}")
+
+# Register handler
+orchestrator = Orchestrator()
+orchestrator.event_handler = MyTraceHandler()
+```
+
+### Supported Event Types
+*   **Orchestrator Lifecycle**: `OrchestratorStartEvent`, `OrchestratorRouteEvent`, `OrchestratorHandoffEvent`, `OrchestratorFinishEvent`, `OrchestratorErrorEvent`
+*   **Agent Lifecycle**: `AgentStartEvent`, `AgentFinishEvent`
+*   **Tool Lifecycle**: `ToolCallEvent`, `ToolResultEvent`
+
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
@@ -105,3 +155,4 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 ---
 
 *Built with ❤️ by [gbvk312](https://github.com/gbvk312).*
+
