@@ -50,3 +50,6 @@ class RedisMemoryBackend(MemoryBackend):
         if self.ttl is not None:
             kwargs["ex"] = self.ttl
         await self._redis.set(self._key(session_id) + ":state", json.dumps(state), **kwargs)
+
+    async def close(self) -> None:
+        await self._redis.aclose()

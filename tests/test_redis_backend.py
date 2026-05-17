@@ -83,3 +83,10 @@ async def test_redis_backend_ttl(mock_redis):
     # Save state with custom TTL
     await backend.save_state("session5", test_state)
     mock_redis.set.assert_called_with("mao:session:session5:state", json.dumps(test_state), ex=3600)
+
+
+@pytest.mark.asyncio
+async def test_redis_backend_close(mock_redis):
+    backend = RedisMemoryBackend()
+    await backend.close()
+    mock_redis.aclose.assert_called_once()
