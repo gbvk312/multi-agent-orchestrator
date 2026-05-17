@@ -123,10 +123,20 @@ class Orchestrator:
         logger.warning("Falling back to agent: %s", fallback)
         return fallback
 
-    async def process_request(self, session_id: str, query: str) -> str:
+    async def pre_process(self, query: str) -> str:
+        """Hook to transform the user query globally before routing. Override in subclasses."""
+        return query
+
+    async def post_process(self, response: str) -> str:
+        """Hook to transform the final orchestrator response globally. Override in subclasses."""
+        return response
+
+    async def process_request(self, session_id: str, query: str, context: dict[str, Any] | None = None) -> str:
         """Processes a user request by routing it to the appropriate agent."""
         trace_id = uuid.uuid4().hex[:12]
         logger.info("[%s] Processing request for session=%s", trace_id, session_id)
+
+        query = await self.pre_process(query)
 
         if self.event_handler:
             await self.event_handler.on_event(OrchestratorStartEvent(session_id, query))
@@ -159,7 +169,12 @@ class Orchestrator:
 
                 try:
                     response_text = await target_agent.process(
-                        current_query, history, session_id=session_id, event_handler=self.event_handler
+                        current_query,
+                        history,
+                        session_id=session_id,
+                        event_handler=self.event_handler,
+                        memory=self.memory,
+                        context=context,
                     )
                     final_response_text += response_text
                     break  # Done processing
@@ -196,6 +211,8 @@ class Orchestrator:
                     logger.error("[%s] %s", trace_id, final_response_text)
                     break
 
+            final_response_text = await self.post_process(final_response_text)
+
             await self.memory.add_message(session_id, "user", query)
             await self.memory.add_message(session_id, "model", final_response_text)
 
@@ -209,10 +226,14 @@ class Orchestrator:
                 await self.event_handler.on_event(OrchestratorErrorEvent(session_id, e))
             raise
 
-    async def process_request_stream(self, session_id: str, query: str) -> AsyncGenerator[str, None]:
+    async def process_request_stream(
+        self, session_id: str, query: str, context: dict[str, Any] | None = None
+    ) -> AsyncGenerator[str, None]:
         """Processes a user request and streams the response."""
         trace_id = uuid.uuid4().hex[:12]
         logger.info("[%s] Streaming request for session=%s", trace_id, session_id)
+
+        query = await self.pre_process(query)
 
         if self.event_handler:
             await self.event_handler.on_event(OrchestratorStartEvent(session_id, query))
@@ -248,7 +269,12 @@ class Orchestrator:
 
                 try:
                     async for chunk in target_agent.process_stream(
-                        current_query, history, session_id=session_id, event_handler=self.event_handler
+                        current_query,
+                        history,
+                        session_id=session_id,
+                        event_handler=self.event_handler,
+                        memory=self.memory,
+                        context=context,
                     ):
                         yield chunk
                         final_response_text += chunk
@@ -290,6 +316,8 @@ class Orchestrator:
                     logger.error("[%s] %s", trace_id, msg)
                     break
 
+            final_response_text = await self.post_process(final_response_text)
+
             await self.memory.add_message(session_id, "user", query)
             await self.memory.add_message(session_id, "model", final_response_text)
 
@@ -316,11 +344,14 @@ class Orchestrator:
         session_id: str,
         query: str,
         sequence: list[str],
+        context: dict[str, Any] | None = None,
     ) -> str:
         """Execute agents sequentially in a pipeline."""
         try:
             if not sequence:
                 raise OrchestratorError("Sequence of agents cannot be empty.")
+
+            query = await self.pre_process(query)
 
             if self.event_handler:
                 await self.event_handler.on_event(OrchestratorStartEvent(session_id, query))
@@ -339,7 +370,12 @@ class Orchestrator:
 
                 try:
                     response = await agent.process(
-                        current_query, history, session_id=session_id, event_handler=self.event_handler
+                        current_query,
+                        history,
+                        session_id=session_id,
+                        event_handler=self.event_handler,
+                        memory=self.memory,
+                        context=context,
                     )
 
                     # Append to history so next agent sees it
@@ -361,6 +397,8 @@ class Orchestrator:
                         raise
                     return f"Chain failed at {agent_name}: {e}"
 
+            final_response = await self.post_process(final_response)
+
             if self.event_handler:
                 await self.event_handler.on_event(OrchestratorFinishEvent(session_id, final_response))
 
@@ -377,6 +415,7 @@ class Orchestrator:
         query: str,
         agent_names: list[str] | None = None,
         max_concurrency: int | None = None,
+        context: dict[str, Any] | None = None,
     ) -> dict[str, str]:
         """Execute multiple agents in parallel and return all results."""
         trace_id = uuid.uuid4().hex[:12]
@@ -384,6 +423,8 @@ class Orchestrator:
         unknown = [n for n in targets if n not in self.agents]
         if unknown:
             raise OrchestratorError(f"Unknown agents: {unknown}")
+
+        query = await self.pre_process(query)
 
         if self.event_handler:
             await self.event_handler.on_event(OrchestratorStartEvent(session_id, query))
@@ -402,7 +443,12 @@ class Orchestrator:
         async def _run_agent_inner(name: str) -> tuple[str, str]:
             try:
                 result = await self.agents[name].process(
-                    query, list(history), session_id=session_id, event_handler=self.event_handler
+                    query,
+                    list(history),
+                    session_id=session_id,
+                    event_handler=self.event_handler,
+                    memory=self.memory,
+                    context=context,
                 )
                 return name, result
             except Exception as e:
@@ -415,6 +461,7 @@ class Orchestrator:
         await self.memory.add_message(session_id, "user", query)
         summary_parts = [f"[{name}]: {resp}" for name, resp in results.items()]
         combined_response = "\n\n".join(summary_parts)
+        combined_response = await self.post_process(combined_response)
         await self.memory.add_message(session_id, "model", combined_response)
 
         if self.event_handler:
