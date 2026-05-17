@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from multi_agent_orchestrator.core.memory import InMemoryBackend, MemoryManager
@@ -146,3 +148,85 @@ async def test_state_deletion_on_clear():
     await memory.clear(session_id)
     state = await memory.get_state(session_id)
     assert state == {}
+
+
+@pytest.mark.asyncio
+async def test_memory_backend_close_no_op():
+    """Verify that MemoryBackend close behaves as a no-op."""
+    backend = InMemoryBackend()
+    # Call base ABC close method directly to cover that line!
+    from multi_agent_orchestrator.core.memory import MemoryBackend
+
+    await MemoryBackend.close(backend)
+    await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_close_delegation():
+    """Verify that MemoryManager delegates close to the backend."""
+
+    class MockBackend(InMemoryBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    backend = MockBackend()
+    memory = MemoryManager(backend=backend)
+    await memory.add_message("s1", "user", "msg")
+    assert len(memory._locks) == 1
+
+    await memory.close()
+    assert backend.closed is True
+    assert len(memory._locks) == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_locks_eviction():
+    """Verify locks auto-eviction works under high session concurrency."""
+    memory = MemoryManager()
+
+    # Fill memory._locks with 1002 unlocked locks
+    import asyncio
+
+    for i in range(1002):
+        memory._locks[f"s{i}"] = asyncio.Lock()
+
+    assert len(memory._locks) == 1002
+
+    # Triggering _get_lock on a new session should evict all 1002 idle locks!
+    lock = memory._get_lock("new_session")
+    assert isinstance(lock, asyncio.Lock)
+    # The s0..s1001 locks should be pruned, leaving only the "new_session" lock
+    assert len(memory._locks) == 1
+    assert "new_session" in memory._locks
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_lock_eviction_preserves_waiters():
+    """Locks with queued waiters should not be pruned as idle."""
+    memory = MemoryManager()
+
+    keep_lock = asyncio.Lock()
+    await keep_lock.acquire()
+
+    async def waiting_task() -> None:
+        async with keep_lock:
+            return None
+
+    waiter = asyncio.create_task(waiting_task())
+    await asyncio.sleep(0)
+    keep_lock.release()
+
+    # During this handoff window, lock may be unlocked but still have waiters.
+    for i in range(1002):
+        memory._locks[f"s{i}"] = asyncio.Lock()
+    memory._locks["session_with_waiter"] = keep_lock
+
+    memory._get_lock("new_session")
+
+    assert "session_with_waiter" in memory._locks
+
+    await waiter

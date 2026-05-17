@@ -95,3 +95,22 @@ async def test_sqlite_backend_wal_mode(sqlite_backend):
         row = await cursor.fetchone()
         assert row is not None
         assert row[0].lower() == "wal"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_backend_invalid_table_name():
+    with pytest.raises(ValueError, match="Invalid SQLite table name"):
+        SQLiteMemoryBackend(table_name="semi;colon")
+    with pytest.raises(ValueError, match="Invalid SQLite table name"):
+        SQLiteMemoryBackend(table_name="123_invalid_start")
+
+
+@pytest.mark.asyncio
+async def test_sqlite_backend_close(sqlite_backend):
+    # Perform operations to initialize cached connection
+    await sqlite_backend.save("session_close", [])
+    assert sqlite_backend._db is not None
+
+    # Close it
+    await sqlite_backend.close()
+    assert sqlite_backend._db is None

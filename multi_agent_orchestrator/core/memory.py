@@ -29,6 +29,11 @@ class MemoryBackend(ABC):
     async def save_state(self, session_id: str, state: dict[str, Any]) -> None:
         """Persist shared state for a session."""
 
+    async def close(self) -> None:
+        """Cleanly close connection pools, file descriptors, or sockets."""
+        # Default implementation is a no-op
+        _ = self
+
 
 class InMemoryBackend(MemoryBackend):
     """In-process dictionary-based memory backend (default)."""
@@ -74,8 +79,20 @@ class MemoryManager:
         runs on a single thread — dict mutations are never interleaved.
         """
         if session_id not in self._locks:
+            # Periodic cleanup to prevent memory leak of idle locks
+            if len(self._locks) > 1000:
+                idle_sessions = [
+                    sid for sid, lk in self._locks.items() if not lk.locked() and not getattr(lk, "_waiters", None)
+                ]
+                for sid in idle_sessions:
+                    self._locks.pop(sid, None)
             self._locks[session_id] = asyncio.Lock()
         return self._locks[session_id]
+
+    async def close(self) -> None:
+        """Cleanly close the underlying storage backend and clear locks."""
+        self._locks.clear()
+        await self._backend.close()
 
     async def add_message(self, session_id: str, role: str, content: str) -> None:
         """Adds a message to the session's history."""

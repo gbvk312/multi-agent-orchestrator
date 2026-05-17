@@ -1,3 +1,5 @@
+from collections.abc import AsyncGenerator, Callable
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -632,3 +634,75 @@ async def test_base_agent_execute_tool_edge_cases():
 
     res2 = await agent_broken._execute_tool(mock_call)
     assert "Error executing tool 'broken_tool': Tool failed" in res2
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_is_async_callable_types(mock_client):
+    """Test _is_async_callable resolves complex callables (partial, custom classes, wraps)."""
+    from functools import partial, wraps
+
+    from multi_agent_orchestrator.core.agent import _is_async_callable
+
+    # 1. Custom callable class
+    class CustomCallableClass:
+        async def __call__(self, arg: str) -> str:
+            return f"Async {arg}"
+
+    callable_instance = CustomCallableClass()
+    assert _is_async_callable(callable_instance) is True
+
+    # 2. Bad callable that raises AttributeError on __call__ access
+    class BadCallable:
+        @property
+        def __call__(self) -> Any:
+            raise AttributeError("Access denied")
+
+    assert _is_async_callable(BadCallable()) is False
+
+    # 3. Synchronous decorator wrapping async fn
+    async def async_fn(val: int) -> str:
+        return str(val)
+
+    def sync_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    wrapped_fn = sync_decorator(async_fn)
+    assert _is_async_callable(wrapped_fn) is True
+
+    # 4. functools.partial wrapping a custom callable class instance (not a coroutine directly)
+    partial_callable = partial(callable_instance, arg="hello")
+    assert _is_async_callable(partial_callable) is True
+
+    # 5. Standard sync function
+    def sync_fn() -> str:
+        return "Sync"
+
+    assert _is_async_callable(sync_fn) is False
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_process_stream_timeout(mock_client_class):
+    """Verify that process_stream() raises AgentError on TimeoutError."""
+    agent = BaseAgent(name="TimeoutStreamAgent", system_prompt="Prompt", timeout=0.01)
+
+    async def slow_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        async def inner_gen() -> AsyncGenerator[Any, None]:
+            import asyncio
+
+            await asyncio.sleep(0.1)
+            yield MagicMock()
+
+        return inner_gen()
+
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content_stream = slow_stream
+
+    with pytest.raises(AgentError, match="Streaming timed out after"):
+        async for _ in agent.process_stream("query", []):
+            pass
