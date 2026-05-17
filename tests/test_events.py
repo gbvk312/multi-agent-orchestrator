@@ -1,11 +1,12 @@
 import pytest
+
 from multi_agent_orchestrator.core.events import (
-    OrchestratorEvent,
-    AgentStartEvent,
     AgentFinishEvent,
+    AgentStartEvent,
+    EventHandler,
+    OrchestratorEvent,
     ToolCallEvent,
     ToolResultEvent,
-    EventHandler,
 )
 
 
@@ -37,8 +38,8 @@ def test_event_initialization():
 @pytest.mark.asyncio
 async def test_event_handler_dispatch():
     class DummyEventHandler(EventHandler):
-        def __init__(self):
-            self.calls = []
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
 
         async def on_agent_start(self, event: AgentStartEvent) -> None:
             self.calls.append(("start", event.agent_name))

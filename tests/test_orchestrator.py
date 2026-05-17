@@ -455,7 +455,7 @@ async def test_orchestrator_process_request_agent_not_found(mock_client_class):
 @pytest.mark.asyncio
 @patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
 async def test_orchestrator_process_request_stream_exceptions(mock_client_class):
-    from multi_agent_orchestrator.core.agent import HumanApprovalRequired, AgentError
+    from multi_agent_orchestrator.core.agent import AgentError, HumanApprovalRequired
 
     orchestrator = Orchestrator()
 
