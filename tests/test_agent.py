@@ -361,17 +361,25 @@ async def test_base_agent_response_schema(mock_client_class):
 @pytest.mark.asyncio
 @patch("multi_agent_orchestrator.core.agent.genai.Client")
 async def test_base_agent_process_stream(mock_client_class):
+    from collections.abc import AsyncGenerator
+    from typing import Any
+
     mock_client = mock_client_class.return_value
 
     # Mock stream chunks
     class MockChunk:
-        def __init__(self, text=None, function_calls=None, candidates=None):
+        def __init__(
+            self,
+            text: str | None = None,
+            function_calls: list[Any] | None = None,
+            candidates: list[Any] | None = None,
+        ) -> None:
             self.text = text
             self.function_calls = function_calls
             self.candidates = candidates
 
     # Define an async generator to mock generate_content_stream
-    async def mock_stream_generator():
+    async def mock_stream_generator() -> AsyncGenerator[MockChunk, None]:
         yield MockChunk(text="Hello ")
         yield MockChunk(text="world!")
 
@@ -429,11 +437,11 @@ async def test_base_agent_tool_handoff_and_hitl(mock_client_class):
 
     mock_client.aio.models.generate_content.return_value = mock_tool_response_approval
 
-    with pytest.raises(HumanApprovalRequired) as exc_info:
+    with pytest.raises(HumanApprovalRequired) as exc_info_hitl:
         await agent.process("query", [])
-    assert exc_info.value.tool_name == "some_tool"
-    assert exc_info.value.tool_args == {"param": 1}
-    assert exc_info.value.message == "approve please"
+    assert exc_info_hitl.value.tool_name == "some_tool"
+    assert exc_info_hitl.value.tool_args == {"param": 1}
+    assert exc_info_hitl.value.message == "approve please"
 
 
 @pytest.mark.asyncio
@@ -447,6 +455,7 @@ async def test_base_agent_with_event_handler(mock_client_class):
     mock_client.aio.models.generate_content.return_value = mock_response
 
     from multi_agent_orchestrator.core.events import EventHandler
+
     handler = MagicMock(spec=EventHandler)
     handler.on_event = AsyncMock()
 
@@ -459,10 +468,18 @@ async def test_base_agent_with_event_handler(mock_client_class):
 @pytest.mark.asyncio
 @patch("multi_agent_orchestrator.core.agent.genai.Client")
 async def test_base_agent_process_stream_with_tool_calls(mock_client_class):
+    from collections.abc import AsyncGenerator
+    from typing import Any
+
     mock_client = mock_client_class.return_value
 
     class MockChunk:
-        def __init__(self, text=None, function_calls=None, candidates=None):
+        def __init__(
+            self,
+            text: str | None = None,
+            function_calls: list[Any] | None = None,
+            candidates: list[Any] | None = None,
+        ) -> None:
             self.text = text
             self.function_calls = function_calls
             self.candidates = candidates
@@ -472,11 +489,11 @@ async def test_base_agent_process_stream_with_tool_calls(mock_client_class):
     mock_fn_call.name = "my_tool"
     mock_fn_call.args = {"val": 123}
 
-    async def mock_stream_1():
+    async def mock_stream_1() -> AsyncGenerator[MockChunk, None]:
         yield MockChunk(function_calls=[mock_fn_call])
 
     # Round 2: Yields final text
-    async def mock_stream_2():
+    async def mock_stream_2() -> AsyncGenerator[MockChunk, None]:
         yield MockChunk(text="Finished")
 
     mock_client.aio.models.generate_content_stream = AsyncMock(side_effect=[mock_stream_1(), mock_stream_2()])
@@ -485,6 +502,7 @@ async def test_base_agent_process_stream_with_tool_calls(mock_client_class):
         return f"Tool got {val}"
 
     from multi_agent_orchestrator.core.events import EventHandler
+
     handler = MagicMock(spec=EventHandler)
     handler.on_event = AsyncMock()
 
