@@ -25,6 +25,7 @@ class OrchestratorConfig(BaseModel):
     agent_timeout: float = Field(default=120.0, gt=0)
     temperature: float = Field(default=0.2, ge=0, le=2)
     routing_temperature: float = Field(default=0.0, ge=0, le=2)
+    propagate_errors: bool = Field(default=False)
 
     @classmethod
     def from_env(cls, **overrides: Any) -> "OrchestratorConfig":
@@ -38,6 +39,7 @@ class OrchestratorConfig(BaseModel):
             "agent_timeout": float(os.getenv("AGENT_TIMEOUT", "120.0")),
             "temperature": float(os.getenv("TEMPERATURE", "0.2")),
             "routing_temperature": float(os.getenv("ROUTING_TEMPERATURE", "0.0")),
+            "propagate_errors": os.getenv("PROPAGATE_ERRORS", "false").lower() in ("true", "1", "yes"),
         }
         env_map.update(overrides)
         return cls(**env_map)

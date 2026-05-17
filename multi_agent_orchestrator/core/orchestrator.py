@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 
 from google import genai
 from google.genai import types
@@ -37,6 +37,7 @@ class Orchestrator:
         config: OrchestratorConfig | None = None,
         event_handler: EventHandler | None = None,
         default_fallback_agent: str | None = None,
+        routing_handler: Callable[[str, dict[str, BaseAgent]], Awaitable[str]] | None = None,
     ):
         self._config = config or OrchestratorConfig.from_env()
 
@@ -45,6 +46,7 @@ class Orchestrator:
         self.model = model or self._config.default_model
         self.event_handler = event_handler
         self.default_fallback_agent = default_fallback_agent
+        self.routing_handler = routing_handler
 
         self._api_key = api_key or self._config.gemini_api_key
         if not self._api_key:
@@ -66,9 +68,30 @@ class Orchestrator:
         if len(agent_names) == 1:
             return agent_names[0]
 
-        agent_descriptions = "\n".join(
-            [f"- {name}: {agent.system_prompt[:100]}..." for name, agent in self.agents.items()]
-        )
+        if self.routing_handler is not None:
+            try:
+                selected_agent = await self.routing_handler(query, self.agents)
+                if selected_agent in self.agents:
+                    return selected_agent
+                logger.warning("Custom routing handler returned unregistered agent: %s", selected_agent)
+            except Exception as e:
+                logger.warning("Custom routing handler failed: %s", e)
+
+        agent_desc_list = []
+        for name, agent in self.agents.items():
+            prompt = agent.system_prompt
+            if callable(prompt):
+                try:
+                    try:
+                        resolved = prompt(query)  # type: ignore[call-arg]
+                    except TypeError:
+                        resolved = prompt()  # type: ignore[call-arg]
+                except Exception:
+                    resolved = str(prompt)
+            else:
+                resolved = prompt
+            agent_desc_list.append(f"- {name}: {resolved[:100]}...")
+        agent_descriptions = "\n".join(agent_desc_list)
         routing_prompt = (
             "You are a routing supervisor. Based on the user's query, "
             "you must decide which agent is best suited to handle the request.\n\n"
@@ -161,6 +184,8 @@ class Orchestrator:
                     break
 
                 except AgentError as e:
+                    if self._config.propagate_errors:
+                        raise
                     final_response_text = f"Error from {target_agent_name}: {e}"
                     logger.error("[%s] %s", trace_id, final_response_text)
                     break
@@ -242,6 +267,8 @@ class Orchestrator:
                     break
 
                 except AgentError as e:
+                    if self._config.propagate_errors:
+                        raise
                     msg = f"\nError from {target_agent_name}: {e}"
                     yield msg
                     final_response_text += msg

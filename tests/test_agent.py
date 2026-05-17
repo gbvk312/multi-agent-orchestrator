@@ -706,3 +706,131 @@ async def test_base_agent_process_stream_timeout(mock_client_class):
     with pytest.raises(AgentError, match="Streaming timed out after"):
         async for _ in agent.process_stream("query", []):
             pass
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_callable_system_prompt(mock_client_class):
+    """Verify system_prompt accepts and evaluates callables dynamically."""
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.text = "Mocked Response"
+    mock_response.function_calls = None
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    # Test query-arg callable
+    def prompt_fn(q: str) -> str:
+        return f"Prompt for: {q}"
+
+    agent = BaseAgent(name="CallableAgent", system_prompt=prompt_fn)
+    await agent.process("hello world", [])
+
+    _, kwargs = mock_client.aio.models.generate_content.call_args
+    assert kwargs["config"].system_instruction == "Prompt for: hello world"
+
+    # Test zero-arg callable
+    def prompt_zero() -> str:
+        return "Zero prompt"
+
+    agent_zero = BaseAgent(name="ZeroCallableAgent", system_prompt=prompt_zero)
+    await agent_zero.process("hello", [])
+
+    _, kwargs_zero = mock_client.aio.models.generate_content.call_args
+    assert kwargs_zero["config"].system_instruction == "Zero prompt"
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_custom_executor(mock_client_class):
+    """Verify that synchronous tools are executed inside the configured custom executor."""
+    import concurrent.futures
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+    def my_sync_tool(x: int) -> int:
+        return x + 1
+
+    agent = BaseAgent(name="ExecAgent", system_prompt="Prompt", tools=[my_sync_tool], executor=executor)
+
+    mock_fn_call = MagicMock()
+    mock_fn_call.name = "my_sync_tool"
+    mock_fn_call.args = {"x": 5}
+
+    # Execute it
+    res = await agent._execute_tool(mock_fn_call)
+    assert res == "6"
+
+    executor.shutdown()
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_retry_jitter(mock_client_class):
+    """Verify that exponential retry calculation adds fractional randomized jitter."""
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_client.aio.models.generate_content.side_effect = Exception("429 Too Many Requests")
+
+    agent = BaseAgent(name="JitterAgent", system_prompt="Prompt", max_retries=2)
+
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        pytest.raises(AgentError, match="All 2 retries exhausted"),
+    ):
+        await agent.process("query", [])
+
+    # The sleep call should have fractional jitter (2**0 + jitter and 2**1 + jitter)
+    assert mock_sleep.call_count == 2
+    sleep_arg_1 = mock_sleep.call_args_list[0][0][0]
+    sleep_arg_2 = mock_sleep.call_args_list[1][0][0]
+    assert 1.1 <= sleep_arg_1 <= 2.0
+    assert 2.1 <= sleep_arg_2 <= 3.0
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_process_stream_callable_system_prompt(mock_client_class):
+    """Verify that process_stream evaluates dynamic callable system prompts correctly."""
+    from collections.abc import AsyncGenerator
+
+    mock_client = mock_client_class.return_value
+
+    class MockChunk:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.function_calls = None
+            self.candidates = None
+
+    async def mock_stream_generator() -> AsyncGenerator[MockChunk, None]:
+        yield MockChunk(text="Stream ")
+        yield MockChunk(text="Result")
+
+    mock_client.aio.models.generate_content_stream = AsyncMock(
+        side_effect=lambda *args, **kwargs: mock_stream_generator()
+    )
+
+    def prompt_stream_fn(q: str) -> str:
+        return f"Prompt for streaming: {q}"
+
+    agent = BaseAgent(name="StreamCallableAgent", system_prompt=prompt_stream_fn)
+
+    chunks = []
+    async for chunk in agent.process_stream("stream query", []):
+        chunks.append(chunk)
+
+    assert chunks == ["Stream ", "Result"]
+    _, kwargs = mock_client.aio.models.generate_content_stream.call_args
+    assert kwargs["config"].system_instruction == "Prompt for streaming: stream query"
+
+    # Test zero-arg callable in streaming
+    def prompt_stream_zero() -> str:
+        return "Zero stream prompt"
+
+    agent_zero = BaseAgent(name="StreamZeroAgent", system_prompt=prompt_stream_zero)
+    chunks_zero = []
+    async for chunk in agent_zero.process_stream("query", []):
+        chunks_zero.append(chunk)
+    assert chunks_zero == ["Stream ", "Result"]
+    _, kwargs_zero = mock_client.aio.models.generate_content_stream.call_args
+    assert kwargs_zero["config"].system_instruction == "Zero stream prompt"

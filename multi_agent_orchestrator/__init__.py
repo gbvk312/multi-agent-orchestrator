@@ -11,6 +11,8 @@ __all__ = [
     "__version__",
     "BaseAgent",
     "AgentError",
+    "AgentHandoff",
+    "HumanApprovalRequired",
     "Orchestrator",
     "OrchestratorError",
     "MemoryManager",
@@ -35,6 +37,8 @@ __all__ = [
 _EXPORT_MAP = {
     "BaseAgent": ".core",
     "AgentError": ".core",
+    "AgentHandoff": ".core",
+    "HumanApprovalRequired": ".core",
     "Orchestrator": ".core",
     "OrchestratorError": ".core",
     "MemoryManager": ".core",

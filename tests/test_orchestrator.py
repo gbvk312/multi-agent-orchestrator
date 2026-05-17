@@ -718,3 +718,161 @@ async def test_orchestrator_events_stream_error(mock_client_class):
 
     events = [call.args[0] for call in mock_handler.on_event.call_args_list]
     assert any(isinstance(e, OrchestratorErrorEvent) and isinstance(e.error, RuntimeError) for e in events)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_custom_routing_handler(mock_client_class):
+    """Verify that the custom routing handler callback routes requests correctly
+    and triggers fallbacks appropriately."""
+
+    async def custom_router(query: str, agents: dict[str, BaseAgent]) -> str:
+        if "to B" in query:
+            return "AgentB"
+        if "crash" in query:
+            raise ValueError("custom router crash")
+        if "ghost" in query:
+            return "Ghost"
+        return "AgentA"
+
+    orchestrator = Orchestrator(routing_handler=custom_router)
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.system_prompt = "Prompt A"
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.system_prompt = "Prompt B"
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    # 1. Successful routing to B
+    selected = await orchestrator._route_request("Send this to B")
+    assert selected == "AgentB"
+
+    # 2. Successful routing to A
+    selected_a = await orchestrator._route_request("Standard query")
+    assert selected_a == "AgentA"
+
+    # 3. Router returns unregistered agent -> falls back to LLM/default fallback routing
+    # We patch Client generate_content to assert it acts as the fallback
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.text = "AgentB"
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    selected_ghost = await orchestrator._route_request("Please ghost")
+    assert selected_ghost == "AgentB"
+
+    # 4. Router throws exception -> falls back to LLM/default fallback routing
+    selected_crash = await orchestrator._route_request("Please crash")
+    assert selected_crash == "AgentB"
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_error_propagation(mock_client_class):
+    """Verify that propagate_errors configuration re-raises AgentErrors vs swallowing them."""
+    from multi_agent_orchestrator.core.agent import AgentError
+    from multi_agent_orchestrator.core.config import OrchestratorConfig
+
+    # Scenario 1: propagate_errors = True
+    config_true = OrchestratorConfig(propagate_errors=True, gemini_api_key="mock-key")
+    orchestrator_true = Orchestrator(config=config_true)
+
+    mock_agent = MagicMock(spec=BaseAgent)
+    mock_agent.name = "AgentA"
+    mock_agent.system_prompt = "Prompt A"
+    mock_agent.process = AsyncMock(side_effect=AgentError("hard fail"))
+
+    async def mock_stream_fail(*args, **kwargs):
+        raise AgentError("stream hard fail")
+        yield "never"
+
+    mock_agent.process_stream = mock_stream_fail
+    orchestrator_true.register_agent(mock_agent)
+
+    # Test standard process raises
+    with (
+        patch.object(orchestrator_true, "_route_request", return_value="AgentA"),
+        pytest.raises(AgentError, match="hard fail"),
+    ):
+        await orchestrator_true.process_request("s1", "query")
+
+    # Test process_stream raises
+    with (
+        patch.object(orchestrator_true, "_route_request", return_value="AgentA"),
+        pytest.raises(AgentError, match="stream hard fail"),
+    ):
+        async for _ in orchestrator_true.process_request_stream("s1", "query"):
+            pass
+
+    # Scenario 2: propagate_errors = False
+    config_false = OrchestratorConfig(propagate_errors=False, gemini_api_key="mock-key")
+    orchestrator_false = Orchestrator(config=config_false)
+    orchestrator_false.register_agent(mock_agent)
+
+    # Test standard process swallows and returns error text
+    with patch.object(orchestrator_false, "_route_request", return_value="AgentA"):
+        res = await orchestrator_false.process_request("s1", "query")
+        assert "Error from AgentA: hard fail" in res
+
+    # Test process_stream swallows and yields error text
+    with patch.object(orchestrator_false, "_route_request", return_value="AgentA"):
+        chunks = []
+        async for chunk in orchestrator_false.process_request_stream("s1", "query"):
+            chunks.append(chunk)
+        assert "Error from AgentA: stream hard fail" in "".join(chunks)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_route_request_with_callable_system_prompts(mock_client_class):
+    """Verify that routing correctly resolves callable prompts for agent descriptions."""
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.text = "AgentA"
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    orchestrator = Orchestrator()
+
+    # 1. Query-taking callable prompt
+    def prompt_query(q: str) -> str:
+        return f"Dynamic query prompt: {q}"
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.system_prompt = prompt_query
+
+    # 2. Zero-arg callable prompt
+    def prompt_zero() -> str:
+        return "Dynamic zero prompt"
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.system_prompt = prompt_zero
+
+    # 3. Crashing callable prompt
+    def prompt_crash(q: str) -> str:
+        raise ValueError("prompt crash")
+
+    agent_c = MagicMock(spec=BaseAgent)
+    agent_c.name = "AgentC"
+    agent_c.system_prompt = prompt_crash
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+    orchestrator.register_agent(agent_c)
+
+    selected = await orchestrator._route_request("Route me")
+    assert selected == "AgentA"
+
+    # Verify the LLM was called with resolved descriptions
+    _, kwargs = mock_client.aio.models.generate_content.call_args
+    routing_prompt = kwargs["contents"]
+    assert "Dynamic query prompt: Route me" in routing_prompt
+    assert "Dynamic zero prompt" in routing_prompt
