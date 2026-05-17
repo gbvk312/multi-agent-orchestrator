@@ -115,3 +115,34 @@ async def test_clear_removes_session_lock():
 def test_memory_manager_repr():
     memory = MemoryManager(max_history=100)
     assert repr(memory) == "MemoryManager(max_history=100, backend=InMemoryBackend)"
+
+
+@pytest.mark.asyncio
+async def test_state_management():
+    memory = MemoryManager()
+    session_id = "state_session"
+
+    # Initial state should be empty
+    state = await memory.get_state(session_id)
+    assert state == {}
+
+    # Update state
+    await memory.update_state(session_id, {"user_name": "Alice", "step": 1})
+    state = await memory.get_state(session_id)
+    assert state == {"user_name": "Alice", "step": 1}
+
+    # Partial update
+    await memory.update_state(session_id, {"step": 2, "complete": True})
+    state = await memory.get_state(session_id)
+    assert state == {"user_name": "Alice", "step": 2, "complete": True}
+
+
+@pytest.mark.asyncio
+async def test_state_deletion_on_clear():
+    memory = MemoryManager()
+    session_id = "state_session"
+    await memory.update_state(session_id, {"foo": "bar"})
+
+    await memory.clear(session_id)
+    state = await memory.get_state(session_id)
+    assert state == {}

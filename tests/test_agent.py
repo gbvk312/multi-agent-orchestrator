@@ -356,3 +356,147 @@ async def test_base_agent_response_schema(mock_client_class):
     _, kwargs = mock_client.aio.models.generate_content.call_args
     assert kwargs["config"].response_mime_type == "application/json"
     assert kwargs["config"].response_schema == schema
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_process_stream(mock_client_class):
+    mock_client = mock_client_class.return_value
+
+    # Mock stream chunks
+    class MockChunk:
+        def __init__(self, text=None, function_calls=None, candidates=None):
+            self.text = text
+            self.function_calls = function_calls
+            self.candidates = candidates
+
+    # Define an async generator to mock generate_content_stream
+    async def mock_stream_generator():
+        yield MockChunk(text="Hello ")
+        yield MockChunk(text="world!")
+
+    mock_client.aio.models.generate_content_stream = AsyncMock(return_value=mock_stream_generator())
+
+    agent = BaseAgent(name="StreamAgent", system_prompt="Prompt")
+    chunks = []
+    async for chunk in agent.process_stream("query", []):
+        chunks.append(chunk)
+
+    assert chunks == ["Hello ", "world!"]
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_tool_handoff_and_hitl(mock_client_class):
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+
+    from multi_agent_orchestrator.core.agent import AgentHandoff, HumanApprovalRequired
+
+    def trigger_handoff():
+        raise AgentHandoff("TargetAgent", "transfer message")
+
+    def trigger_approval():
+        raise HumanApprovalRequired("some_tool", {"param": 1}, "approve please")
+
+    mock_fn_call_handoff = MagicMock()
+    mock_fn_call_handoff.name = "trigger_handoff"
+    mock_fn_call_handoff.args = {}
+
+    mock_tool_response_handoff = MagicMock()
+    mock_tool_response_handoff.function_calls = [mock_fn_call_handoff]
+    mock_tool_response_handoff.candidates = [MagicMock()]
+    mock_tool_response_handoff.candidates[0].content = types.Content(role="model", parts=[])
+
+    mock_client.aio.models.generate_content.return_value = mock_tool_response_handoff
+
+    agent = BaseAgent(name="TestAgent", system_prompt="Prompt", tools=[trigger_handoff, trigger_approval])
+
+    with pytest.raises(AgentHandoff) as exc_info:
+        await agent.process("query", [])
+    assert exc_info.value.target_agent == "TargetAgent"
+    assert exc_info.value.message == "transfer message"
+
+    # Now test HumanApprovalRequired
+    mock_fn_call_approval = MagicMock()
+    mock_fn_call_approval.name = "trigger_approval"
+    mock_fn_call_approval.args = {}
+
+    mock_tool_response_approval = MagicMock()
+    mock_tool_response_approval.function_calls = [mock_fn_call_approval]
+    mock_tool_response_approval.candidates = [MagicMock()]
+    mock_tool_response_approval.candidates[0].content = types.Content(role="model", parts=[])
+
+    mock_client.aio.models.generate_content.return_value = mock_tool_response_approval
+
+    with pytest.raises(HumanApprovalRequired) as exc_info:
+        await agent.process("query", [])
+    assert exc_info.value.tool_name == "some_tool"
+    assert exc_info.value.tool_args == {"param": 1}
+    assert exc_info.value.message == "approve please"
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_with_event_handler(mock_client_class):
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.text = "Handled"
+    mock_response.function_calls = None
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    from multi_agent_orchestrator.core.events import EventHandler
+    handler = MagicMock(spec=EventHandler)
+    handler.on_event = AsyncMock()
+
+    agent = BaseAgent(name="EventAgent", system_prompt="Prompt")
+    await agent.process("query", [], event_handler=handler)
+
+    assert handler.on_event.call_count == 2  # Start and finish events
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_process_stream_with_tool_calls(mock_client_class):
+    mock_client = mock_client_class.return_value
+
+    class MockChunk:
+        def __init__(self, text=None, function_calls=None, candidates=None):
+            self.text = text
+            self.function_calls = function_calls
+            self.candidates = candidates
+
+    # Round 1: Yields a tool call
+    mock_fn_call = MagicMock()
+    mock_fn_call.name = "my_tool"
+    mock_fn_call.args = {"val": 123}
+
+    async def mock_stream_1():
+        yield MockChunk(function_calls=[mock_fn_call])
+
+    # Round 2: Yields final text
+    async def mock_stream_2():
+        yield MockChunk(text="Finished")
+
+    mock_client.aio.models.generate_content_stream = AsyncMock(side_effect=[mock_stream_1(), mock_stream_2()])
+
+    def my_tool(val: int) -> str:
+        return f"Tool got {val}"
+
+    from multi_agent_orchestrator.core.events import EventHandler
+    handler = MagicMock(spec=EventHandler)
+    handler.on_event = AsyncMock()
+
+    agent = BaseAgent(name="StreamAgent", system_prompt="Prompt", tools=[my_tool])
+
+    # We also pass some history and response schema to cover those lines!
+    agent.response_schema = {"type": "string"}
+    history = [{"role": "user", "content": "prev"}, {"role": "model", "content": "resp"}]
+
+    chunks = []
+    async for chunk in agent.process_stream("query", history, event_handler=handler):
+        chunks.append(chunk)
+
+    assert chunks == ["Finished"]
+    assert handler.on_event.call_count > 0
