@@ -29,6 +29,7 @@ class Orchestrator:
         api_key: str | None = None,
         config: OrchestratorConfig | None = None,
         event_handler: EventHandler | None = None,
+        default_fallback_agent: str | None = None,
     ):
         self._config = config or OrchestratorConfig.from_env()
 
@@ -36,6 +37,7 @@ class Orchestrator:
         self.memory = memory_manager or MemoryManager(max_history=self._config.max_history)
         self.model = model or self._config.default_model
         self.event_handler = event_handler
+        self.default_fallback_agent = default_fallback_agent
 
         self._api_key = api_key or self._config.gemini_api_key
         if not self._api_key:
@@ -84,8 +86,13 @@ class Orchestrator:
                 if selected_agent in self.agents:
                     return selected_agent
         except Exception as e:
-            logger.warning("Routing LLM call failed (%s), falling back to first agent.", e)
-        return agent_names[0]
+            logger.warning("Routing LLM call failed (%s)", e)
+
+        fallback = self.default_fallback_agent or agent_names[0]
+        if fallback not in self.agents:
+            fallback = agent_names[0]
+        logger.warning("Falling back to agent: %s", fallback)
+        return fallback
 
     async def process_request(self, session_id: str, query: str) -> str:
         """Processes a user request by routing it to the appropriate agent."""
@@ -244,6 +251,7 @@ class Orchestrator:
         session_id: str,
         query: str,
         agent_names: list[str] | None = None,
+        max_concurrency: int | None = None,
     ) -> dict[str, str]:
         """Execute multiple agents in parallel and return all results."""
         trace_id = uuid.uuid4().hex[:12]
@@ -255,7 +263,15 @@ class Orchestrator:
         history = await self.memory.get_history(session_id)
         logger.info("[%s] Fan-out to %d agents: %s", trace_id, len(targets), targets)
 
+        semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency is not None else None
+
         async def _run_agent(name: str) -> tuple[str, str]:
+            if semaphore:
+                async with semaphore:
+                    return await _run_agent_inner(name)
+            return await _run_agent_inner(name)
+
+        async def _run_agent_inner(name: str) -> tuple[str, str]:
             try:
                 result = await self.agents[name].process(
                     query, history, session_id=session_id, event_handler=self.event_handler

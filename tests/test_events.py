@@ -65,3 +65,13 @@ async def test_event_handler_dispatch():
         ("tool_call", "t"),
         ("tool_result", "t"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_base_event_handler_defaults():
+    handler = EventHandler()
+    # These should do nothing and not raise any exceptions
+    await handler.on_event(AgentStartEvent("s", "a", "q"))
+    await handler.on_event(AgentFinishEvent("s", "a", "r"))
+    await handler.on_event(ToolCallEvent("s", "a", "t", {}))
+    await handler.on_event(ToolResultEvent("s", "a", "t", "res"))

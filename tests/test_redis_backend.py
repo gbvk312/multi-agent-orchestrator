@@ -47,3 +47,39 @@ async def test_redis_backend_delete(mock_redis):
     assert mock_redis.delete.call_count == 2
     mock_redis.delete.assert_any_call("mao:session:session3")
     mock_redis.delete.assert_any_call("mao:session:session3:state")
+
+
+@pytest.mark.asyncio
+async def test_redis_backend_state(mock_redis):
+    backend = RedisMemoryBackend()
+    test_state = {"user_theme": "dark", "tokens": 120}
+
+    # Load empty state
+    mock_redis.get.return_value = None
+    state = await backend.load_state("session4")
+    assert state == {}
+    mock_redis.get.assert_called_with("mao:session:session4:state")
+
+    # Save state (no TTL)
+    await backend.save_state("session4", test_state)
+    mock_redis.set.assert_called_with("mao:session:session4:state", json.dumps(test_state))
+
+    # Load state
+    mock_redis.get.return_value = json.dumps(test_state)
+    state = await backend.load_state("session4")
+    assert state == test_state
+
+
+@pytest.mark.asyncio
+async def test_redis_backend_ttl(mock_redis):
+    backend = RedisMemoryBackend(ttl_seconds=3600)
+    test_history = [{"role": "user", "content": "hello"}]
+    test_state = {"user_theme": "dark"}
+
+    # Save history with custom TTL
+    await backend.save("session5", test_history)
+    mock_redis.set.assert_called_with("mao:session:session5", json.dumps(test_history), ex=3600)
+
+    # Save state with custom TTL
+    await backend.save_state("session5", test_state)
+    mock_redis.set.assert_called_with("mao:session:session5:state", json.dumps(test_state), ex=3600)
