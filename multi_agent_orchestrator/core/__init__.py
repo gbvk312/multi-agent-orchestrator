@@ -16,6 +16,16 @@ __all__ = [
     "RedisMemoryBackend",
     "SQLiteMemoryBackend",
     "OrchestratorConfig",
+    "EventHandler",
+    "AgentStartEvent",
+    "AgentFinishEvent",
+    "ToolCallEvent",
+    "ToolResultEvent",
+    "OrchestratorStartEvent",
+    "OrchestratorRouteEvent",
+    "OrchestratorHandoffEvent",
+    "OrchestratorFinishEvent",
+    "OrchestratorErrorEvent",
 ]
 
 
@@ -30,6 +40,16 @@ _EXPORT_MAP = {
     "RedisMemoryBackend": ".redis_backend",
     "SQLiteMemoryBackend": ".sqlite_backend",
     "OrchestratorConfig": ".config",
+    "EventHandler": ".events",
+    "AgentStartEvent": ".events",
+    "AgentFinishEvent": ".events",
+    "ToolCallEvent": ".events",
+    "ToolResultEvent": ".events",
+    "OrchestratorStartEvent": ".events",
+    "OrchestratorRouteEvent": ".events",
+    "OrchestratorHandoffEvent": ".events",
+    "OrchestratorFinishEvent": ".events",
+    "OrchestratorErrorEvent": ".events",
 }
 
 

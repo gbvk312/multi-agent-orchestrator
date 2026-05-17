@@ -2,6 +2,14 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from multi_agent_orchestrator import (
+    EventHandler,
+    OrchestratorErrorEvent,
+    OrchestratorFinishEvent,
+    OrchestratorHandoffEvent,
+    OrchestratorRouteEvent,
+    OrchestratorStartEvent,
+)
 from multi_agent_orchestrator.core.agent import BaseAgent
 from multi_agent_orchestrator.core.memory import MemoryManager
 from multi_agent_orchestrator.core.orchestrator import Orchestrator, OrchestratorError
@@ -542,3 +550,171 @@ async def test_fan_out_concurrency_semaphore(mock_client_class):
     results = await orchestrator.fan_out("s1", "Query", max_concurrency=1)
     assert results["AgentA"] == "Response A"
     assert results["AgentB"] == "Response B"
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_events_normal_flow(mock_client_class):
+    """Verify standard orchestrator events are dispatched during normal process_request."""
+    orchestrator = Orchestrator()
+    mock_handler = AsyncMock(spec=EventHandler)
+    orchestrator.event_handler = mock_handler
+
+    agent = MagicMock(spec=BaseAgent)
+    agent.name = "AgentA"
+    agent.process = AsyncMock(return_value="Ok response")
+    orchestrator.register_agent(agent)
+
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        await orchestrator.process_request("session_event_1", "Hello there")
+
+    # Assert mock_handler.on_event was called with Start, Route, Finish events
+    assert mock_handler.on_event.call_count == 3
+    events = [call.args[0] for call in mock_handler.on_event.call_args_list]
+
+    assert any(
+        isinstance(e, OrchestratorStartEvent) and e.session_id == "session_event_1" and e.query == "Hello there"
+        for e in events
+    )
+    assert any(
+        isinstance(e, OrchestratorRouteEvent) and e.session_id == "session_event_1" and e.agent_name == "AgentA"
+        for e in events
+    )
+    assert any(
+        isinstance(e, OrchestratorFinishEvent) and e.session_id == "session_event_1" and e.response == "Ok response"
+        for e in events
+    )
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_events_handoff(mock_client_class):
+    """Verify OrchestratorHandoffEvent is dispatched during agent handoff."""
+    from multi_agent_orchestrator.core.agent import AgentHandoff
+
+    orchestrator = Orchestrator()
+    mock_handler = AsyncMock(spec=EventHandler)
+    orchestrator.event_handler = mock_handler
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(side_effect=AgentHandoff("AgentB", "transfer info"))
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process = AsyncMock(return_value="Final Answer")
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        await orchestrator.process_request("session_event_2", "Go to B")
+
+    events = [call.args[0] for call in mock_handler.on_event.call_args_list]
+    assert any(
+        isinstance(e, OrchestratorHandoffEvent)
+        and e.source_agent == "AgentA"
+        and e.target_agent == "AgentB"
+        and e.message == "transfer info"
+        for e in events
+    )
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_events_error(mock_client_class):
+    """Verify OrchestratorErrorEvent is dispatched during a process_request exception."""
+    orchestrator = Orchestrator()
+    mock_handler = AsyncMock(spec=EventHandler)
+    orchestrator.event_handler = mock_handler
+
+    agent = MagicMock(spec=BaseAgent)
+    agent.name = "AgentA"
+    # Cause a standard exception to trigger OrchestratorErrorEvent
+    agent.process = AsyncMock(side_effect=ValueError("Unexpected backend failure"))
+    orchestrator.register_agent(agent)
+
+    with (
+        patch.object(orchestrator, "_route_request", return_value="AgentA"),
+        pytest.raises(ValueError, match="Unexpected backend failure"),
+    ):
+        await orchestrator.process_request("session_event_3", "Break things")
+
+    events = [call.args[0] for call in mock_handler.on_event.call_args_list]
+    assert any(isinstance(e, OrchestratorErrorEvent) and isinstance(e.error, ValueError) for e in events)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_events_stream_flow(mock_client_class):
+    """Verify OrchestratorStartEvent, RouteEvent, FinishEvent, and HandoffEvent work in streaming mode."""
+    from multi_agent_orchestrator.core.agent import AgentHandoff
+
+    orchestrator = Orchestrator()
+    mock_handler = AsyncMock(spec=EventHandler)
+    orchestrator.event_handler = mock_handler
+
+    async def mock_stream_a(*args, **kwargs):
+        raise AgentHandoff("AgentB", "handoff from stream")
+        yield "never"
+
+    async def mock_stream_b(*args, **kwargs):
+        yield "Chunk X"
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process_stream = mock_stream_a
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process_stream = mock_stream_b
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        chunks = []
+        async for chunk in orchestrator.process_request_stream("session_event_4", "Stream handoff"):
+            chunks.append(chunk)
+
+    assert "".join(chunks) == "Chunk X"
+    events = [call.args[0] for call in mock_handler.on_event.call_args_list]
+
+    assert any(isinstance(e, OrchestratorStartEvent) for e in events)
+    assert any(isinstance(e, OrchestratorRouteEvent) for e in events)
+    assert any(
+        isinstance(e, OrchestratorHandoffEvent)
+        and e.source_agent == "AgentA"
+        and e.target_agent == "AgentB"
+        and e.message == "handoff from stream"
+        for e in events
+    )
+    assert any(isinstance(e, OrchestratorFinishEvent) and e.response == "Chunk X" for e in events)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_events_stream_error(mock_client_class):
+    """Verify OrchestratorErrorEvent is dispatched during a streaming exception."""
+    orchestrator = Orchestrator()
+    mock_handler = AsyncMock(spec=EventHandler)
+    orchestrator.event_handler = mock_handler
+
+    async def mock_stream_fail(*args, **kwargs):
+        raise RuntimeError("Streaming crashed")
+        yield "never"
+
+    agent = MagicMock(spec=BaseAgent)
+    agent.name = "AgentA"
+    agent.process_stream = mock_stream_fail
+    orchestrator.register_agent(agent)
+
+    with (
+        patch.object(orchestrator, "_route_request", return_value="AgentA"),
+        pytest.raises(RuntimeError, match="Streaming crashed"),
+    ):
+        async for _ in orchestrator.process_request_stream("session_event_5", "Stream crash"):
+            pass
+
+    events = [call.args[0] for call in mock_handler.on_event.call_args_list]
+    assert any(isinstance(e, OrchestratorErrorEvent) and isinstance(e.error, RuntimeError) for e in events)

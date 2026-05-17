@@ -14,11 +14,17 @@ class RedisMemoryBackend(MemoryBackend):
         redis_url: str = "redis://localhost",
         prefix: str = "mao:session:",
         ttl_seconds: int | None = None,
+        redis_client: redis.Redis | None = None,
     ):
         self.redis_url = redis_url
         self.prefix = prefix
         self.ttl = ttl_seconds
-        self._redis = redis.from_url(self.redis_url, decode_responses=True)
+        if redis_client is not None:
+            self._redis = redis_client
+            self._owns_client = False
+        else:
+            self._redis = redis.from_url(self.redis_url, decode_responses=True)
+            self._owns_client = True
 
     def _key(self, session_id: str) -> str:
         return f"{self.prefix}{session_id}"
@@ -52,4 +58,5 @@ class RedisMemoryBackend(MemoryBackend):
         await self._redis.set(self._key(session_id) + ":state", json.dumps(state), **kwargs)
 
     async def close(self) -> None:
-        await self._redis.aclose()
+        if self._owns_client:
+            await self._redis.aclose()
