@@ -1,3 +1,5 @@
+from collections.abc import AsyncGenerator, Callable
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -639,6 +641,7 @@ async def test_base_agent_execute_tool_edge_cases():
 async def test_base_agent_is_async_callable_types(mock_client):
     """Test _is_async_callable resolves complex callables (partial, custom classes, wraps)."""
     from functools import partial, wraps
+
     from multi_agent_orchestrator.core.agent import _is_async_callable
 
     # 1. Custom callable class
@@ -652,7 +655,7 @@ async def test_base_agent_is_async_callable_types(mock_client):
     # 2. Bad callable that raises AttributeError on __call__ access
     class BadCallable:
         @property
-        def __call__(self):
+        def __call__(self) -> Any:
             raise AttributeError("Access denied")
 
     assert _is_async_callable(BadCallable()) is False
@@ -661,9 +664,9 @@ async def test_base_agent_is_async_callable_types(mock_client):
     async def async_fn(val: int) -> str:
         return str(val)
 
-    def sync_decorator(func):
+    def sync_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             return func(*args, **kwargs)
         return wrapper
 
@@ -687,8 +690,8 @@ async def test_base_agent_process_stream_timeout(mock_client_class):
     """Verify that process_stream() raises AgentError on TimeoutError."""
     agent = BaseAgent(name="TimeoutStreamAgent", system_prompt="Prompt", timeout=0.01)
 
-    async def slow_stream(*args, **kwargs):
-        async def inner_gen():
+    async def slow_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        async def inner_gen() -> AsyncGenerator[Any, None]:
             import asyncio
             await asyncio.sleep(0.1)
             yield MagicMock()

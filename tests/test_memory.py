@@ -162,10 +162,10 @@ async def test_memory_backend_close_no_op():
 async def test_memory_manager_close_delegation():
     """Verify that MemoryManager delegates close to the backend."""
     class MockBackend(InMemoryBackend):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.closed = False
-        async def close(self):
+        async def close(self) -> None:
             self.closed = True
 
     backend = MockBackend()
