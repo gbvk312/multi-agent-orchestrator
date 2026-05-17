@@ -61,3 +61,37 @@ async def test_sqlite_backend_delete(sqlite_backend):
     # Verify deleted
     history = await sqlite_backend.load("session4")
     assert history == []
+
+
+@pytest.mark.asyncio
+async def test_sqlite_backend_state(sqlite_backend):
+    # Verify default state is empty
+    state = await sqlite_backend.load_state("session_state_1")
+    assert state == {}
+
+    # Save state
+    test_state = {"user_theme": "dark", "tokens": 120}
+    await sqlite_backend.save_state("session_state_1", test_state)
+
+    # Load and assert
+    loaded_state = await sqlite_backend.load_state("session_state_1")
+    assert loaded_state == test_state
+
+    # Override state
+    test_state_2 = {"user_theme": "light"}
+    await sqlite_backend.save_state("session_state_1", test_state_2)
+    loaded_state_2 = await sqlite_backend.load_state("session_state_1")
+    assert loaded_state_2 == test_state_2
+
+
+@pytest.mark.asyncio
+async def test_sqlite_backend_wal_mode(sqlite_backend):
+    # Initialize the database by calling save
+    await sqlite_backend.save("session_wal", [])
+
+    import aiosqlite
+
+    async with aiosqlite.connect(sqlite_backend.db_path) as db, db.execute("PRAGMA journal_mode;") as cursor:
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row[0].lower() == "wal"

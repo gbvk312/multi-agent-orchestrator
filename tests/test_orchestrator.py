@@ -490,3 +490,55 @@ async def test_orchestrator_process_request_stream_exceptions(mock_client_class)
         async for chunk in orchestrator.process_request_stream("s1", "Query"):
             chunks.append(chunk)
     assert "Error from AgentB: Agent is down" in "".join(chunks)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_custom_fallback_agent(mock_client_class):
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    # Mock LLM to throw an exception to trigger the fallback logic
+    mock_client.aio.models.generate_content.side_effect = Exception("Routing failed")
+
+    orchestrator = Orchestrator(default_fallback_agent="AgentB")
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.system_prompt = "Prompt A"
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.system_prompt = "Prompt B"
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    selected = await orchestrator._route_request("Query")
+    # Should fallback to our custom default fallback agent
+    assert selected == "AgentB"
+
+    # Test unregistered fallback agent falls back to first registered agent
+    orchestrator.default_fallback_agent = "GhostAgent"
+    selected2 = await orchestrator._route_request("Query")
+    assert selected2 == "AgentA"
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_fan_out_concurrency_semaphore(mock_client_class):
+    orchestrator = Orchestrator()
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(return_value="Response A")
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process = AsyncMock(return_value="Response B")
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    # Test parallel fan-out with max_concurrency=1
+    results = await orchestrator.fan_out("s1", "Query", max_concurrency=1)
+    assert results["AgentA"] == "Response A"
+    assert results["AgentB"] == "Response B"

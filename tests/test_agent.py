@@ -518,3 +518,117 @@ async def test_base_agent_process_stream_with_tool_calls(mock_client_class):
 
     assert chunks == ["Finished"]
     assert handler.on_event.call_count > 0
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_tool_event_handler(mock_client_class):
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+
+    mock_fn_call = MagicMock()
+    mock_fn_call.name = "my_tool"
+    mock_fn_call.args = None  # test args_dict = {}
+
+    mock_response = MagicMock()
+    mock_response.function_calls = [mock_fn_call]
+    mock_response.candidates = [MagicMock()]
+    mock_response.candidates[0].content = types.Content(role="model", parts=[])
+
+    mock_final_response = MagicMock()
+    mock_final_response.function_calls = None
+    mock_final_response.text = "Final Output"
+
+    mock_client.aio.models.generate_content.side_effect = [mock_response, mock_final_response]
+
+    def my_tool() -> str:
+        return "result"
+
+    from multi_agent_orchestrator.core.events import EventHandler
+
+    handler = MagicMock(spec=EventHandler)
+    handler.on_event = AsyncMock()
+
+    agent = BaseAgent(name="ToolAgent", system_prompt="Prompt", tools=[my_tool])
+    res = await agent.process("query", [], event_handler=handler)
+
+    assert res == "Final Output"
+    # Verify handler received tool call and tool result events
+    assert handler.on_event.call_count == 4  # Start, ToolCall, ToolResult, Finish
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_process_stream_candidates_and_max_rounds(mock_client_class):
+    from collections.abc import AsyncGenerator
+    from typing import Any
+
+    mock_client = mock_client_class.return_value
+
+    class MockChunk:
+        def __init__(
+            self,
+            text: str | None = None,
+            function_calls: list[Any] | None = None,
+            candidates: list[Any] | None = None,
+        ) -> None:
+            self.text = text
+            self.function_calls = function_calls
+            self.candidates = candidates
+
+    # Yields a tool call to keep executing tool loops
+    mock_fn_call = MagicMock()
+    mock_fn_call.name = "my_tool"
+    mock_fn_call.args = {}
+
+    async def mock_infinite_stream() -> AsyncGenerator[MockChunk, None]:
+        # Yield candidate content to cover parts is None and parts extend branches!
+        mock_cand_1 = MagicMock()
+        mock_cand_1.content = types.Content(role="model", parts=None)
+
+        mock_cand_2 = MagicMock()
+        mock_cand_2.content = types.Content(role="model", parts=[types.Part.from_text(text="part2")])
+
+        yield MockChunk(function_calls=[mock_fn_call], candidates=[mock_cand_1])
+        yield MockChunk(function_calls=[], candidates=[mock_cand_2])
+
+    async def get_infinite_stream(*args, **kwargs):
+        return mock_infinite_stream()
+
+    # Let's set side effect to return infinite stream for each round
+    mock_client.aio.models.generate_content_stream.side_effect = get_infinite_stream
+
+    def my_tool() -> str:
+        return "result"
+
+    agent = BaseAgent(name="MaxRoundAgent", system_prompt="Prompt", tools=[my_tool])
+    agent.max_tool_rounds = 2  # Keep it small to trigger limit fast
+
+    chunks = []
+    async for chunk in agent.process_stream("query", []):
+        chunks.append(chunk)
+
+    assert any("Reached maximum tool execution rounds" in c for c in chunks)
+
+
+@pytest.mark.asyncio
+async def test_base_agent_execute_tool_edge_cases():
+    agent = BaseAgent(name="EdgeAgent", system_prompt="Prompt")
+
+    # 1. Unknown tool call without a name
+    mock_call_no_name = MagicMock()
+    mock_call_no_name.name = None
+    res = await agent._execute_tool(mock_call_no_name)
+    assert res == "Error: Unknown tool call without a name."
+
+    # 2. Tool throws exception
+    def broken_tool() -> str:
+        raise ValueError("Tool failed")
+
+    agent_broken = BaseAgent(name="BrokenAgent", system_prompt="Prompt", tools=[broken_tool])
+    mock_call = MagicMock()
+    mock_call.name = "broken_tool"
+    mock_call.args = {}
+
+    res2 = await agent_broken._execute_tool(mock_call)
+    assert "Error executing tool 'broken_tool': Tool failed" in res2

@@ -18,6 +18,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         if self._initialized:
             return
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA journal_mode=WAL;")
             await db.execute(
                 f"CREATE TABLE IF NOT EXISTS {self.table_name} (session_id TEXT PRIMARY KEY, history TEXT, state TEXT)"
             )
