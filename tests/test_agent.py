@@ -318,7 +318,7 @@ async def test_base_agent_retries_exhausted(mock_client_class):
         pytest.raises(AgentError, match="All 2 retries exhausted"),
     ):
         await agent.process("query", [])
-    
+
     assert mock_client.aio.models.generate_content.call_count == 2
 
 

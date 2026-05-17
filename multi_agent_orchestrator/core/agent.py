@@ -169,7 +169,7 @@ class BaseAgent:
         """Executes a single tool call and returns the result as a string."""
         if not call.name:
             return "Error: Unknown tool call without a name."  # pragma: no cover
-            
+
         tool_fn = self._tool_map.get(call.name)
         if not tool_fn:
             return f"Error: Unknown tool '{call.name}'. Available tools: {list(self._tool_map.keys())}"
