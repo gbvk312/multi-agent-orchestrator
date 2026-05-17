@@ -61,6 +61,7 @@ class AgentHandoff(Exception):
     def __init__(self, target_agent: str, message: str = ""):
         self.target_agent = target_agent
         self.message = message
+        super().__init__(f"Handoff to {target_agent}: {message}")
 
 
 class HumanApprovalRequired(Exception):
@@ -70,6 +71,7 @@ class HumanApprovalRequired(Exception):
         self.tool_name = tool_name
         self.tool_args = tool_args
         self.message = message
+        super().__init__(f"Human approval required for tool '{tool_name}': {message}")
 
 
 class BaseAgent:
@@ -105,6 +107,8 @@ class BaseAgent:
         self.timeout = timeout if timeout is not None else self._config.agent_timeout
         self.temperature = temperature if temperature is not None else self._config.temperature
         self.max_tool_rounds = max_tool_rounds if max_tool_rounds is not None else self._config.max_tool_rounds
+        if response_schema is not None and not isinstance(response_schema, (dict, type)):
+            raise AgentError(f"response_schema must be a dict or type, got {type(response_schema).__name__}")
         self.response_schema = response_schema
         self.executor = executor
 
@@ -280,6 +284,7 @@ class BaseAgent:
                                 candidates_content.parts.extend(chunk.candidates[0].content.parts)
 
                 if not function_calls:
+                    collected_text = await self.post_process(collected_text)
                     if event_handler:
                         event_finish = AgentFinishEvent(session_id, self.name, collected_text)
                         await self._await_with_timeout(event_handler.on_event(event_finish))
@@ -310,7 +315,10 @@ class BaseAgent:
                         )
                 contents.append(types.Content(role="user", parts=fn_response_parts))
 
-            yield f"[{self.name}] Reached maximum tool execution rounds ({self.max_tool_rounds})."
+            max_msg = await self.post_process(
+                f"[{self.name}] Reached maximum tool execution rounds ({self.max_tool_rounds})."
+            )
+            yield max_msg
         except TimeoutError as exc:
             raise AgentError(f"[{self.name}] Streaming timed out after {self.timeout}s") from exc
 

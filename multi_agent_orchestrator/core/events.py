@@ -1,10 +1,13 @@
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 
 @dataclass(frozen=True, slots=True)
 class OrchestratorEvent:
     """Base class for all orchestrator events."""
+
+    timestamp: float = field(default_factory=time.time, init=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)

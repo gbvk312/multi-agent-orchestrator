@@ -3,11 +3,12 @@
 import os
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OrchestratorConfig(BaseModel):
     """Unified configuration loaded from environment variables or explicit values.
+
 
     Usage:
         config = OrchestratorConfig.from_env()
@@ -16,6 +17,8 @@ class OrchestratorConfig(BaseModel):
     Note: Call ``dotenv.load_dotenv()`` at your application entry-point
     before using ``from_env()`` if you need ``.env`` file support.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     gemini_api_key: str = Field(default="")
     default_model: str = Field(default="gemini-2.5-flash")
