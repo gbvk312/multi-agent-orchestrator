@@ -33,12 +33,12 @@ cd multi-agent-orchestrator
 # Using uv (Recommended)
 uv venv
 source .venv/bin/activate
-uv pip install -e ".[dev,api,storage]"
+uv pip install -e ".[dev]"
 
 # Or using standard pip
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev,api,storage]"
+pip install -e ".[dev]"
 ```
 
 ## Quick Start
@@ -52,19 +52,6 @@ pip install -e ".[dev,api,storage]"
    ```bash
    python examples/basic_workflow.py
    ```
-4. Run the FastAPI wrapper example:
-   ```bash
-   python examples/fastapi_wrapper.py
-   ```
-
-## Documentation
-
-This project uses [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) for documentation.
-To build and serve the documentation locally:
-```bash
-uv run mkdocs serve
-```
-Then open `http://127.0.0.1:8000` in your browser.
 
 ## Creating Custom Agents
 

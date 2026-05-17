@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import uuid
 
@@ -81,19 +82,27 @@ you must decide which agent is best suited to handle the request.
         {agent_descriptions}
 
         User Query: "{query}"
-
-        Respond ONLY with the exact name of the selected agent. If no agent is suitable, respond with "Default".
         """
+
+        schema = types.Schema(type=types.Type.STRING, enum=agent_names)
 
         try:
             response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=routing_prompt,
-                config=types.GenerateContentConfig(temperature=self._config.routing_temperature),
+                config=types.GenerateContentConfig(
+                    temperature=self._config.routing_temperature,
+                    response_mime_type="application/json",
+                    response_schema=schema,
+                ),
             )
 
             if response.text:
-                selected_agent = response.text.strip()
+                try:
+                    selected_agent = str(json.loads(response.text))
+                except json.JSONDecodeError:
+                    selected_agent = str(response.text.strip().strip('"'))
+
                 if selected_agent in self.agents:
                     return selected_agent
         except Exception as e:

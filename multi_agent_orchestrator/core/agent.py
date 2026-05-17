@@ -38,6 +38,7 @@ class BaseAgent:
         timeout: float | None = None,
         temperature: float | None = None,
         max_tool_rounds: int | None = None,
+        response_schema: Any | None = None,
         config: OrchestratorConfig | None = None,
     ):
         # Config provides defaults; explicit params take precedence
@@ -51,6 +52,7 @@ class BaseAgent:
         self.timeout = timeout if timeout is not None else self._config.agent_timeout
         self.temperature = temperature if temperature is not None else self._config.temperature
         self.max_tool_rounds = max_tool_rounds if max_tool_rounds is not None else self._config.max_tool_rounds
+        self.response_schema = response_schema
 
         # Build a lookup map for tool execution
         self._tool_map: dict[str, Callable[..., Any]] = {fn.__name__: fn for fn in self.tools}
@@ -90,11 +92,17 @@ class BaseAgent:
         # Append the current query
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=query)]))
 
-        config = types.GenerateContentConfig(
-            system_instruction=self.system_prompt,
-            tools=self.tools if self.tools else None,  # type: ignore[arg-type]
-            temperature=self.temperature,
-        )
+        kwargs: dict[str, Any] = {
+            "system_instruction": self.system_prompt,
+            "tools": self.tools if self.tools else None,
+            "temperature": self.temperature,
+        }
+
+        if self.response_schema is not None:
+            kwargs["response_mime_type"] = "application/json"
+            kwargs["response_schema"] = self.response_schema
+
+        config = types.GenerateContentConfig(**kwargs)
 
         for _round_num in range(self.max_tool_rounds):
             response = await self._call_model_with_retry(contents, config)

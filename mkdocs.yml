@@ -1,0 +1,51 @@
+site_name: Multi-Agent Orchestrator
+site_description: An asynchronous, Gemini-powered framework for multi-agent orchestration.
+site_author: gbvk
+
+repo_name: gbvk312/multi-agent-orchestrator
+repo_url: https://github.com/gbvk312/multi-agent-orchestrator
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_source: true
+            show_bases: true
+            show_signature_annotations: true
+
+nav:
+  - Home: index.md
+  - API Reference: api_reference.md

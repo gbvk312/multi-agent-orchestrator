@@ -31,3 +31,6 @@ dist/
 htmlcov/
 # MacOS
 .DS_Store
+
+# MkDocs
+site/

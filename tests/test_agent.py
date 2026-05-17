@@ -334,3 +334,25 @@ async def test_base_agent_no_candidates(mock_client_class):
     agent = BaseAgent(name="TestAgent", system_prompt="Prompt")
     response = await agent.process("query", [])
     assert "Generation failed or blocked by safety settings" in response
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_response_schema(mock_client_class):
+    """Verify that response_schema is properly passed to GenerateContentConfig."""
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.text = '{"some": "json"}'
+    mock_response.function_calls = None
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    schema = {"type": "object", "properties": {"some": {"type": "string"}}}
+    agent = BaseAgent(name="SchemaAgent", system_prompt="Prompt", response_schema=schema)
+    response = await agent.process("query", [])
+
+    assert response == '{"some": "json"}'
+    mock_client.aio.models.generate_content.assert_called_once()
+    _, kwargs = mock_client.aio.models.generate_content.call_args
+    assert kwargs["config"].response_mime_type == "application/json"
+    assert kwargs["config"].response_schema == schema
