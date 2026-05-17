@@ -32,9 +32,7 @@ class SQLiteMemoryBackend(MemoryBackend):
 
     async def load(self, session_id: str) -> list[dict[str, Any]]:
         db = await self._get_db()
-        async with db.execute(
-            f"SELECT history FROM {self.table_name} WHERE session_id = ?", (session_id,)
-        ) as cursor:
+        async with db.execute(f"SELECT history FROM {self.table_name} WHERE session_id = ?", (session_id,)) as cursor:
             row = await cursor.fetchone()
             if row:
                 return cast(list[dict[str, Any]], json.loads(row[0]))
@@ -58,9 +56,7 @@ class SQLiteMemoryBackend(MemoryBackend):
 
     async def load_state(self, session_id: str) -> dict[str, Any]:
         db = await self._get_db()
-        async with db.execute(
-            f"SELECT state FROM {self.table_name} WHERE session_id = ?", (session_id,)
-        ) as cursor:
+        async with db.execute(f"SELECT state FROM {self.table_name} WHERE session_id = ?", (session_id,)) as cursor:
             row = await cursor.fetchone()
             if row and row[0]:
                 return cast(dict[str, Any], json.loads(row[0]))

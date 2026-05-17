@@ -82,9 +82,7 @@ class MemoryManager:
             # Periodic cleanup to prevent memory leak of idle locks
             if len(self._locks) > 1000:
                 idle_sessions = [
-                    sid
-                    for sid, lk in self._locks.items()
-                    if not lk.locked() and not getattr(lk, "_waiters", None)
+                    sid for sid, lk in self._locks.items() if not lk.locked() and not getattr(lk, "_waiters", None)
                 ]
                 for sid in idle_sessions:
                     self._locks.pop(sid, None)

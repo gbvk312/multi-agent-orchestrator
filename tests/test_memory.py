@@ -1,4 +1,5 @@
 import asyncio
+
 import pytest
 
 from multi_agent_orchestrator.core.memory import InMemoryBackend, MemoryManager
@@ -155,6 +156,7 @@ async def test_memory_backend_close_no_op():
     backend = InMemoryBackend()
     # Call base ABC close method directly to cover that line!
     from multi_agent_orchestrator.core.memory import MemoryBackend
+
     await MemoryBackend.close(backend)
     await backend.close()
 
@@ -162,10 +164,12 @@ async def test_memory_backend_close_no_op():
 @pytest.mark.asyncio
 async def test_memory_manager_close_delegation():
     """Verify that MemoryManager delegates close to the backend."""
+
     class MockBackend(InMemoryBackend):
         def __init__(self) -> None:
             super().__init__()
             self.closed = False
+
         async def close(self) -> None:
             self.closed = True
 
@@ -186,6 +190,7 @@ async def test_memory_manager_locks_eviction():
 
     # Fill memory._locks with 1002 unlocked locks
     import asyncio
+
     for i in range(1002):
         memory._locks[f"s{i}"] = asyncio.Lock()
 

@@ -107,11 +107,11 @@ class BaseAgent:
         except TimeoutError as exc:
             raise AgentError(f"[{self.name}] Processing timed out after {self.timeout}s") from exc
 
-
     async def _await_with_timeout(self, awaitable: Any) -> Any:
         """Apply per-operation timeout to upstream await points."""
         async with asyncio.timeout(self.timeout):
             return await awaitable
+
     async def _process_inner(
         self,
         query: str,
@@ -154,12 +154,14 @@ class BaseAgent:
             for call in response.function_calls:
                 if event_handler and call.name:
                     args_dict = dict(call.args) if call.args else {}
-                    await self._await_with_timeout(event_handler.on_event(ToolCallEvent(session_id, self.name, call.name, args_dict)))
+                    event_call = ToolCallEvent(session_id, self.name, call.name, args_dict)
+                    await self._await_with_timeout(event_handler.on_event(event_call))
 
                 result = await self._await_with_timeout(self._execute_tool(call))
 
                 if event_handler and call.name:
-                    await self._await_with_timeout(event_handler.on_event(ToolResultEvent(session_id, self.name, call.name, result)))
+                    event_result = ToolResultEvent(session_id, self.name, call.name, result)
+                    await self._await_with_timeout(event_handler.on_event(event_result))
 
                 tool_results.append(result)
 
@@ -185,7 +187,8 @@ class BaseAgent:
     ) -> AsyncGenerator[str, None]:
         try:
             if event_handler:
-                await self._await_with_timeout(event_handler.on_event(AgentStartEvent(session_id, self.name, query)))
+                event_start = AgentStartEvent(session_id, self.name, query)
+                await self._await_with_timeout(event_handler.on_event(event_start))
 
             contents = []
             for msg in history:
@@ -204,67 +207,70 @@ class BaseAgent:
             config = types.GenerateContentConfig(**kwargs)
 
             for _round_num in range(self.max_tool_rounds):
-                    response_stream = await self._await_with_timeout(
-                        self.client.aio.models.generate_content_stream(
-                            model=self.model,
-                            contents=contents,
-                            config=config,
-                        )
+                response_stream = await self._await_with_timeout(
+                    self.client.aio.models.generate_content_stream(
+                        model=self.model,
+                        contents=contents,
+                        config=config,
                     )
+                )
 
-                    collected_text = ""
-                    function_calls = []
-                    candidates_content = None
+                collected_text = ""
+                function_calls = []
+                candidates_content = None
 
-                    stream_iter = response_stream.__aiter__()
-                    while True:
-                        try:
-                            chunk = await self._await_with_timeout(stream_iter.__anext__())
-                        except StopAsyncIteration:
-                            break
+                stream_iter = response_stream.__aiter__()
+                while True:
+                    try:
+                        chunk = await self._await_with_timeout(stream_iter.__anext__())
+                    except StopAsyncIteration:
+                        break
 
-                        if chunk.text:
-                            yield chunk.text
-                            collected_text += chunk.text
-                        if chunk.function_calls:
-                            function_calls.extend(chunk.function_calls)
+                    if chunk.text:
+                        yield chunk.text
+                        collected_text += chunk.text
+                    if chunk.function_calls:
+                        function_calls.extend(chunk.function_calls)
 
-                        if chunk.candidates and chunk.candidates[0].content:
-                            if not candidates_content:
-                                candidates_content = chunk.candidates[0].content
-                            else:
-                                if candidates_content.parts is None:
-                                    candidates_content.parts = []
-                                if chunk.candidates[0].content.parts:
-                                    candidates_content.parts.extend(chunk.candidates[0].content.parts)
+                    if chunk.candidates and chunk.candidates[0].content:
+                        if not candidates_content:
+                            candidates_content = chunk.candidates[0].content
+                        else:
+                            if candidates_content.parts is None:
+                                candidates_content.parts = []
+                            if chunk.candidates[0].content.parts:
+                                candidates_content.parts.extend(chunk.candidates[0].content.parts)
 
-                    if not function_calls:
-                        if event_handler:
-                            await self._await_with_timeout(event_handler.on_event(AgentFinishEvent(session_id, self.name, collected_text)))
-                        return
+                if not function_calls:
+                    if event_handler:
+                        event_finish = AgentFinishEvent(session_id, self.name, collected_text)
+                        await self._await_with_timeout(event_handler.on_event(event_finish))
+                    return
 
-                    tool_results = []
-                    for call in function_calls:
-                        if event_handler and call.name:
-                            args_dict = dict(call.args) if call.args else {}
-                            await self._await_with_timeout(event_handler.on_event(ToolCallEvent(session_id, self.name, call.name, args_dict)))
+                tool_results = []
+                for call in function_calls:
+                    if event_handler and call.name:
+                        args_dict = dict(call.args) if call.args else {}
+                        event_call = ToolCallEvent(session_id, self.name, call.name, args_dict)
+                        await self._await_with_timeout(event_handler.on_event(event_call))
 
-                        result = await self._await_with_timeout(self._execute_tool(call))
+                    result = await self._await_with_timeout(self._execute_tool(call))
 
-                        if event_handler and call.name:
-                            await self._await_with_timeout(event_handler.on_event(ToolResultEvent(session_id, self.name, call.name, result)))
-                        tool_results.append(result)
+                    if event_handler and call.name:
+                        event_result = ToolResultEvent(session_id, self.name, call.name, result)
+                        await self._await_with_timeout(event_handler.on_event(event_result))
+                    tool_results.append(result)
 
-                    if candidates_content:
-                        contents.append(candidates_content)
+                if candidates_content:
+                    contents.append(candidates_content)
 
-                    fn_response_parts = []
-                    for call, result in zip(function_calls, tool_results, strict=True):
-                        if call.name:
-                            fn_response_parts.append(
-                                types.Part.from_function_response(name=call.name, response={"result": result})
-                            )
-                    contents.append(types.Content(role="user", parts=fn_response_parts))
+                fn_response_parts = []
+                for call, result in zip(function_calls, tool_results, strict=True):
+                    if call.name:
+                        fn_response_parts.append(
+                            types.Part.from_function_response(name=call.name, response={"result": result})
+                        )
+                contents.append(types.Content(role="user", parts=fn_response_parts))
 
             yield f"[{self.name}] Reached maximum tool execution rounds ({self.max_tool_rounds})."
         except TimeoutError as exc:

@@ -668,6 +668,7 @@ async def test_base_agent_is_async_callable_types(mock_client):
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             return func(*args, **kwargs)
+
         return wrapper
 
     wrapped_fn = sync_decorator(async_fn)
@@ -693,8 +694,10 @@ async def test_base_agent_process_stream_timeout(mock_client_class):
     async def slow_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
         async def inner_gen() -> AsyncGenerator[Any, None]:
             import asyncio
+
             await asyncio.sleep(0.1)
             yield MagicMock()
+
         return inner_gen()
 
     mock_client = mock_client_class.return_value
