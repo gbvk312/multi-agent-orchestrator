@@ -4,6 +4,13 @@ from __future__ import annotations
 
 __version__ = "0.1.0"
 
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("multi-agent-orchestrator")
+except Exception:  # pragma: no cover
+    pass  # Fallback to hardcoded version above
+
 from importlib import import_module
 from typing import Any
 

@@ -116,3 +116,19 @@ def test_config_propagate_errors_defaults_and_env(monkeypatch):
 
     monkeypatch.setenv("PROPAGATE_ERRORS", "false")
     assert OrchestratorConfig.from_env().propagate_errors is False
+
+
+def test_config_max_handoffs_defaults_and_env(monkeypatch):
+    """Verify default value and environment reading for max_handoffs."""
+    config = OrchestratorConfig()
+    assert config.max_handoffs == 5
+
+    monkeypatch.setenv("MAX_HANDOFFS", "10")
+    config_env = OrchestratorConfig.from_env()
+    assert config_env.max_handoffs == 10
+
+
+def test_config_validation_max_handoffs():
+    """max_handoffs must be >= 1."""
+    with pytest.raises(ValidationError):
+        OrchestratorConfig(max_handoffs=0)

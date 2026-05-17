@@ -1,98 +1,99 @@
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, ClassVar
 
 
+@dataclass(frozen=True, slots=True)
 class OrchestratorEvent:
     """Base class for all orchestrator events."""
 
-    pass
 
-
+@dataclass(frozen=True, slots=True)
 class AgentStartEvent(OrchestratorEvent):
-    def __init__(self, session_id: str, agent_name: str, query: str):
-        self.session_id = session_id
-        self.agent_name = agent_name
-        self.query = query
+    session_id: str
+    agent_name: str
+    query: str
 
 
+@dataclass(frozen=True, slots=True)
 class AgentFinishEvent(OrchestratorEvent):
-    def __init__(self, session_id: str, agent_name: str, response: str):
-        self.session_id = session_id
-        self.agent_name = agent_name
-        self.response = response
+    session_id: str
+    agent_name: str
+    response: str
 
 
+@dataclass(frozen=True, slots=True)
 class ToolCallEvent(OrchestratorEvent):
-    def __init__(self, session_id: str, agent_name: str, tool_name: str, args: dict[str, Any]):
-        self.session_id = session_id
-        self.agent_name = agent_name
-        self.tool_name = tool_name
-        self.args = args
+    session_id: str
+    agent_name: str
+    tool_name: str
+    args: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
 class ToolResultEvent(OrchestratorEvent):
-    def __init__(self, session_id: str, agent_name: str, tool_name: str, result: str):
-        self.session_id = session_id
-        self.agent_name = agent_name
-        self.tool_name = tool_name
-        self.result = result
+    session_id: str
+    agent_name: str
+    tool_name: str
+    result: str
 
 
+@dataclass(frozen=True, slots=True)
 class OrchestratorStartEvent(OrchestratorEvent):
-    def __init__(self, session_id: str, query: str):
-        self.session_id = session_id
-        self.query = query
+    session_id: str
+    query: str
 
 
+@dataclass(frozen=True, slots=True)
 class OrchestratorRouteEvent(OrchestratorEvent):
-    def __init__(self, session_id: str, query: str, agent_name: str):
-        self.session_id = session_id
-        self.query = query
-        self.agent_name = agent_name
+    session_id: str
+    query: str
+    agent_name: str
 
 
+@dataclass(frozen=True, slots=True)
 class OrchestratorHandoffEvent(OrchestratorEvent):
-    def __init__(self, session_id: str, source_agent: str, target_agent: str, message: str):
-        self.session_id = session_id
-        self.source_agent = source_agent
-        self.target_agent = target_agent
-        self.message = message
+    session_id: str
+    source_agent: str
+    target_agent: str
+    message: str
 
 
+@dataclass(frozen=True, slots=True)
 class OrchestratorFinishEvent(OrchestratorEvent):
-    def __init__(self, session_id: str, response: str):
-        self.session_id = session_id
-        self.response = response
+    session_id: str
+    response: str
 
 
+@dataclass(frozen=True, slots=True)
 class OrchestratorErrorEvent(OrchestratorEvent):
-    def __init__(self, session_id: str, error: Exception):
-        self.session_id = session_id
-        self.error = error
+    session_id: str
+    error: Exception
 
 
 class EventHandler:
-    """Base class for handling orchestrator events."""
+    """Base class for handling orchestrator events.
+
+    Uses a dispatch registry for O(1) event routing. Subclass and override
+    individual ``on_*`` methods to handle specific event types.
+    """
+
+    _EVENT_DISPATCH: ClassVar[dict[type, str]] = {
+        AgentStartEvent: "on_agent_start",
+        AgentFinishEvent: "on_agent_finish",
+        ToolCallEvent: "on_tool_call",
+        ToolResultEvent: "on_tool_result",
+        OrchestratorStartEvent: "on_orchestrator_start",
+        OrchestratorRouteEvent: "on_orchestrator_route",
+        OrchestratorHandoffEvent: "on_orchestrator_handoff",
+        OrchestratorFinishEvent: "on_orchestrator_finish",
+        OrchestratorErrorEvent: "on_orchestrator_error",
+    }
 
     async def on_event(self, event: OrchestratorEvent) -> None:
-        """Handle an incoming event."""
-        if isinstance(event, AgentStartEvent):
-            await self.on_agent_start(event)
-        elif isinstance(event, AgentFinishEvent):
-            await self.on_agent_finish(event)
-        elif isinstance(event, ToolCallEvent):
-            await self.on_tool_call(event)
-        elif isinstance(event, ToolResultEvent):
-            await self.on_tool_result(event)
-        elif isinstance(event, OrchestratorStartEvent):
-            await self.on_orchestrator_start(event)
-        elif isinstance(event, OrchestratorRouteEvent):
-            await self.on_orchestrator_route(event)
-        elif isinstance(event, OrchestratorHandoffEvent):
-            await self.on_orchestrator_handoff(event)
-        elif isinstance(event, OrchestratorFinishEvent):
-            await self.on_orchestrator_finish(event)
-        elif isinstance(event, OrchestratorErrorEvent):
-            await self.on_orchestrator_error(event)
+        """Handle an incoming event via the dispatch registry."""
+        method_name = self._EVENT_DISPATCH.get(type(event))
+        if method_name is not None:
+            await getattr(self, method_name)(event)
 
     async def on_agent_start(self, event: AgentStartEvent) -> None:
         pass

@@ -834,3 +834,144 @@ async def test_base_agent_process_stream_callable_system_prompt(mock_client_clas
     assert chunks_zero == ["Stream ", "Result"]
     _, kwargs_zero = mock_client.aio.models.generate_content_stream.call_args
     assert kwargs_zero["config"].system_instruction == "Zero stream prompt"
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_async_system_prompt(mock_client_class):
+    """Verify async callable system prompts are awaited correctly."""
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.text = "Mocked"
+    mock_response.function_calls = None
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    # Async prompt taking query arg
+    async def async_prompt(q: str) -> str:
+        return f"Async prompt for: {q}"
+
+    agent = BaseAgent(name="AsyncPromptAgent", system_prompt=async_prompt)
+    await agent.process("hello", [])
+
+    _, kwargs = mock_client.aio.models.generate_content.call_args
+    assert kwargs["config"].system_instruction == "Async prompt for: hello"
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_async_system_prompt_zero_arg(mock_client_class):
+    """Verify async callable system prompts with zero args work correctly."""
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.text = "Mocked"
+    mock_response.function_calls = None
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    async def async_prompt_zero() -> str:
+        return "Async zero prompt"
+
+    agent = BaseAgent(name="AsyncZeroAgent", system_prompt=async_prompt_zero)
+    await agent.process("hello", [])
+
+    _, kwargs = mock_client.aio.models.generate_content.call_args
+    assert kwargs["config"].system_instruction == "Async zero prompt"
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_lifecycle_hooks(mock_client_class):
+    """Verify pre_process and post_process hooks are called during process()."""
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.text = "Raw response"
+    mock_response.function_calls = None
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    class HookedAgent(BaseAgent):
+        async def pre_process(self, query, history):
+            return f"PREPROCESSED: {query}"
+
+        async def post_process(self, response):
+            return f"POSTPROCESSED: {response}"
+
+    agent = HookedAgent(name="HookedAgent", system_prompt="Prompt")
+    response = await agent.process("original query", [])
+
+    assert response == "POSTPROCESSED: Raw response"
+    # Verify pre_process modified the query sent to model
+    _, kwargs = mock_client.aio.models.generate_content.call_args
+    contents = kwargs["contents"]
+    assert contents[-1].parts[0].text == "PREPROCESSED: original query"
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_lifecycle_hooks_streaming(mock_client_class):
+    """Verify pre_process is called during process_stream()."""
+    from collections.abc import AsyncGenerator
+
+    mock_client = mock_client_class.return_value
+
+    class MockChunk:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.function_calls = None
+            self.candidates = None
+
+    async def mock_stream_generator() -> AsyncGenerator[MockChunk, None]:
+        yield MockChunk(text="Streamed")
+
+    mock_client.aio.models.generate_content_stream = AsyncMock(
+        side_effect=lambda *args, **kwargs: mock_stream_generator()
+    )
+
+    class HookedStreamAgent(BaseAgent):
+        async def pre_process(self, query, history):
+            return f"STREAM_PRE: {query}"
+
+    agent = HookedStreamAgent(name="HookedStreamAgent", system_prompt="Prompt")
+    chunks = []
+    async for chunk in agent.process_stream("original", []):
+        chunks.append(chunk)
+
+    assert chunks == ["Streamed"]
+    # Verify pre_process modified the query
+    _, kwargs = mock_client.aio.models.generate_content_stream.call_args
+    contents = kwargs["contents"]
+    assert contents[-1].parts[0].text == "STREAM_PRE: original"
+
+
+@pytest.mark.asyncio
+async def test_resolve_prompt_utility():
+    """Verify _resolve_prompt handles all prompt types correctly."""
+    from multi_agent_orchestrator.core.agent import _resolve_prompt
+
+    # 1. Static string
+    assert await _resolve_prompt("Static", "query") == "Static"
+
+    # 2. Sync callable with query arg
+    def sync_fn(q: str) -> str:
+        return f"Sync: {q}"
+
+    assert await _resolve_prompt(sync_fn, "test") == "Sync: test"
+
+    # 3. Sync callable with zero args
+    def sync_zero() -> str:
+        return "Sync zero"
+
+    assert await _resolve_prompt(sync_zero, "test") == "Sync zero"
+
+    # 4. Async callable with query arg
+    async def async_fn(q: str) -> str:
+        return f"Async: {q}"
+
+    assert await _resolve_prompt(async_fn, "test") == "Async: test"
+
+    # 5. Async callable with zero args
+    async def async_zero() -> str:
+        return "Async zero"
+
+    assert await _resolve_prompt(async_zero, "test") == "Async zero"

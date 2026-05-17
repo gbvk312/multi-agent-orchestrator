@@ -65,6 +65,30 @@ def test_event_initialization():
     assert oerror.error == err
 
 
+def test_event_dataclass_features():
+    """Verify dataclass frozen, slots, repr, and eq behavior."""
+    # Frozen: events should be immutable
+    event = AgentStartEvent("s1", "a1", "q1")
+    with pytest.raises(AttributeError):
+        event.session_id = "new"  # type: ignore[misc]
+
+    # Equality: two events with same fields should be equal
+    event_a = AgentStartEvent("s1", "a1", "q1")
+    event_b = AgentStartEvent("s1", "a1", "q1")
+    assert event_a == event_b
+
+    # Inequality
+    event_c = AgentStartEvent("s1", "a1", "q2")
+    assert event_a != event_c
+
+    # Repr: auto-generated repr should contain class name and fields
+    assert "AgentStartEvent" in repr(event_a)
+    assert "s1" in repr(event_a)
+
+    # Slots: __dict__ should not exist
+    assert not hasattr(event_a, "__dict__")
+
+
 @pytest.mark.asyncio
 async def test_event_handler_dispatch():
     class DummyEventHandler(EventHandler):
@@ -135,3 +159,11 @@ async def test_base_event_handler_defaults():
     await handler.on_event(OrchestratorHandoffEvent("s", "a1", "a2", "msg"))
     await handler.on_event(OrchestratorFinishEvent("s", "resp"))
     await handler.on_event(OrchestratorErrorEvent("s", ValueError("err")))
+
+
+@pytest.mark.asyncio
+async def test_event_handler_unknown_event_type():
+    """Verify on_event silently ignores unknown event types."""
+    handler = EventHandler()
+    # A plain OrchestratorEvent has no handler mapping — should not raise
+    await handler.on_event(OrchestratorEvent())

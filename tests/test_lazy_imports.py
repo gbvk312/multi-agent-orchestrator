@@ -41,3 +41,11 @@ def test_core_lazy_imports():
     # Invalid attribute should raise AttributeError
     with pytest.raises(AttributeError, match="has no attribute 'InvalidAttr'"):
         _ = core.InvalidAttr
+
+
+def test_version_is_string():
+    """Verify __version__ is set and is a non-empty string."""
+    import multi_agent_orchestrator
+
+    assert isinstance(multi_agent_orchestrator.__version__, str)
+    assert len(multi_agent_orchestrator.__version__) > 0

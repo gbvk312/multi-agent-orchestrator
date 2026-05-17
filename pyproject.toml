@@ -57,7 +57,7 @@ include = ["multi_agent_orchestrator*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-addopts = "--cov=multi_agent_orchestrator --cov-report=term-missing --cov-report=xml"
+addopts = "--cov=multi_agent_orchestrator --cov-report=term-missing --cov-report=xml --cov-fail-under=100"
 
 [tool.ruff]
 target-version = "py311"

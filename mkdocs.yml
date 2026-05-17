@@ -48,4 +48,6 @@ plugins:
 
 nav:
   - Home: index.md
+  - Guides:
+      - Handoffs & HITL: guides/handoffs.md
   - API Reference: api_reference.md
