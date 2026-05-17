@@ -100,3 +100,19 @@ def test_config_validation_routing_temperature_range():
         OrchestratorConfig(routing_temperature=-0.1)
     with pytest.raises(ValidationError):
         OrchestratorConfig(routing_temperature=2.1)
+
+
+def test_config_propagate_errors_defaults_and_env(monkeypatch):
+    """Verify default value and environment reading for propagate_errors."""
+    config = OrchestratorConfig()
+    assert config.propagate_errors is False
+
+    monkeypatch.setenv("PROPAGATE_ERRORS", "true")
+    config_env = OrchestratorConfig.from_env()
+    assert config_env.propagate_errors is True
+
+    monkeypatch.setenv("PROPAGATE_ERRORS", "1")
+    assert OrchestratorConfig.from_env().propagate_errors is True
+
+    monkeypatch.setenv("PROPAGATE_ERRORS", "false")
+    assert OrchestratorConfig.from_env().propagate_errors is False

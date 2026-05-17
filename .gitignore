@@ -1,44 +1,83 @@
-# Byte-compiled / optimized / DLL files
+# ==========================================
+# Byte-compiled / Optimized / DLL Files
+# ==========================================
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Virtual environments
+# ==========================================
+# Virtual Environments & Environment Files
+# ==========================================
 .venv/
 venv/
 env/
 .env
+.env.*
+!.env.example
 
-# Package distributions
+# ==========================================
+# Packaging & Distributions
+# ==========================================
 *.egg-info/
 build/
 dist/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
 
-# UV lock file (if you prefer to ignore it, though typically lock files are committed)
-# uv.lock
-
-# IDEs
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Test / build caches
+# ==========================================
+# Caching, Testing, & Coverage Reports
+# ==========================================
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
+nosetests.xml
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Local database files
+# ==========================================
+# Databases & Persistent Session Stores
+# ==========================================
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
-# MacOS
-.DS_Store
-
-# MkDocs
+# ==========================================
+# Documentation & Website Builds
+# ==========================================
 site/
 
+# ==========================================
+# Operating System Files
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ==========================================
+# IDEs, Editors & Workspaces
+# ==========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+.project
+.pydevproject
+.settings/

@@ -7,6 +7,8 @@ def test_top_level_lazy_imports():
 
     # Fetching attributes should work
     assert multi_agent_orchestrator.BaseAgent is not None
+    assert multi_agent_orchestrator.AgentHandoff is not None
+    assert multi_agent_orchestrator.HumanApprovalRequired is not None
     assert multi_agent_orchestrator.Orchestrator is not None
     assert multi_agent_orchestrator.MemoryManager is not None
     assert multi_agent_orchestrator.RedisMemoryBackend is not None
@@ -26,6 +28,8 @@ def test_core_lazy_imports():
 
     # Fetching attributes should work
     assert core.BaseAgent is not None
+    assert core.AgentHandoff is not None
+    assert core.HumanApprovalRequired is not None
     assert core.Orchestrator is not None
     assert core.MemoryManager is not None
     assert core.RedisMemoryBackend is not None

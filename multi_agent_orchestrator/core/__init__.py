@@ -8,6 +8,8 @@ from typing import Any
 __all__ = [
     "BaseAgent",
     "AgentError",
+    "AgentHandoff",
+    "HumanApprovalRequired",
     "Orchestrator",
     "OrchestratorError",
     "MemoryManager",
@@ -32,6 +34,8 @@ __all__ = [
 _EXPORT_MAP = {
     "BaseAgent": ".agent",
     "AgentError": ".agent",
+    "AgentHandoff": ".agent",
+    "HumanApprovalRequired": ".agent",
     "Orchestrator": ".orchestrator",
     "OrchestratorError": ".orchestrator",
     "MemoryManager": ".memory",

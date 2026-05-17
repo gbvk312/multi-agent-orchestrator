@@ -1,7 +1,9 @@
 import asyncio
+import concurrent.futures
 import functools
 import inspect
 import logging
+import random
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
@@ -63,7 +65,7 @@ class BaseAgent:
     def __init__(
         self,
         name: str,
-        system_prompt: str,
+        system_prompt: str | Callable[[], str] | Callable[[str], str],
         model: str | None = None,
         tools: list[Callable[..., Any]] | None = None,
         max_retries: int | None = None,
@@ -73,6 +75,7 @@ class BaseAgent:
         max_tool_rounds: int | None = None,
         response_schema: Any | None = None,
         config: OrchestratorConfig | None = None,
+        executor: concurrent.futures.Executor | None = None,
     ):
         self._config = config or OrchestratorConfig.from_env()
 
@@ -85,6 +88,7 @@ class BaseAgent:
         self.temperature = temperature if temperature is not None else self._config.temperature
         self.max_tool_rounds = max_tool_rounds if max_tool_rounds is not None else self._config.max_tool_rounds
         self.response_schema = response_schema
+        self.executor = executor
 
         self._tool_map: dict[str, Callable[..., Any]] = {fn.__name__: fn for fn in self.tools}
 
@@ -128,8 +132,17 @@ class BaseAgent:
             contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=query)]))
 
+        prompt_fn = self.system_prompt
+        if callable(prompt_fn):
+            try:
+                system_instruction = prompt_fn(query)  # type: ignore[call-arg]
+            except TypeError:
+                system_instruction = prompt_fn()  # type: ignore[call-arg]
+        else:
+            system_instruction = prompt_fn
+
         kwargs: dict[str, Any] = {
-            "system_instruction": self.system_prompt,
+            "system_instruction": system_instruction,
             "tools": self.tools if self.tools else None,
             "temperature": self.temperature,
         }
@@ -196,8 +209,17 @@ class BaseAgent:
                 contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
             contents.append(types.Content(role="user", parts=[types.Part.from_text(text=query)]))
 
+            prompt_fn = self.system_prompt
+            if callable(prompt_fn):
+                try:
+                    system_instruction = prompt_fn(query)  # type: ignore[call-arg]
+                except TypeError:
+                    system_instruction = prompt_fn()  # type: ignore[call-arg]
+            else:
+                system_instruction = prompt_fn
+
             kwargs: dict[str, Any] = {
-                "system_instruction": self.system_prompt,
+                "system_instruction": system_instruction,
                 "tools": self.tools if self.tools else None,
                 "temperature": self.temperature,
             }
@@ -291,8 +313,8 @@ class BaseAgent:
                 last_error = e
                 error_str = str(e).lower()
                 if "429" in error_str or "resource exhausted" in error_str or "500" in error_str:
-                    wait_time = 2**attempt
-                    logger.warning("[%s] Attempt %d failed, retrying in %ds...", self.name, attempt + 1, wait_time)
+                    wait_time = (2**attempt) + random.uniform(0.1, 1.0)
+                    logger.warning("[%s] Attempt %d failed, retrying in %.2fs...", self.name, attempt + 1, wait_time)
                     await asyncio.sleep(wait_time)
                 else:
                     raise AgentError(f"[{self.name}] Model call failed: {e}") from e
@@ -312,7 +334,11 @@ class BaseAgent:
             if _is_async_callable(tool_fn):
                 result = await tool_fn(**args)
             else:
-                result = await asyncio.to_thread(tool_fn, **args)
+                if self.executor is not None:
+                    loop = asyncio.get_running_loop()
+                    result = await loop.run_in_executor(self.executor, functools.partial(tool_fn, **args))
+                else:
+                    result = await asyncio.to_thread(tool_fn, **args)
             return str(result)
         except AgentHandoff:
             raise
