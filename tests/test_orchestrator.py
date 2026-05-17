@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -303,3 +303,190 @@ async def test_fan_out_agent_error(mock_client_class):
 
     assert results["AgentA"] == "Response A"
     assert "Error from AgentB: AgentB blew up" in results["AgentB"]
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_handoff_in_processing(mock_client_class):
+    """Verify that agent handoff exceptions are caught and correctly routed in process_request."""
+    from multi_agent_orchestrator.core.agent import AgentHandoff
+
+    orchestrator = Orchestrator()
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(side_effect=AgentHandoff("AgentB", "transfer payload"))
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process = AsyncMock(return_value="Final Answer from B")
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        response = await orchestrator.process_request("s1", "Initial request")
+
+    assert response == "Final Answer from B"
+    agent_a.process.assert_called_once()
+    # Agent B should be called with the handoff message
+    agent_b.process.assert_called_once_with("transfer payload", ANY, session_id="s1", event_handler=None)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_human_approval_pausing(mock_client_class):
+    """Verify that human approval exceptions pause processing in process_request."""
+    from multi_agent_orchestrator.core.agent import HumanApprovalRequired
+
+    orchestrator = Orchestrator()
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(side_effect=HumanApprovalRequired("tool_x", {"foo": "bar"}, "please approve"))
+
+    orchestrator.register_agent(agent_a)
+
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        response = await orchestrator.process_request("s1", "Run tool")
+
+    assert "Execution paused. Human approval required for tool 'tool_x'" in response
+    assert "please approve" in response
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_sequential_chain(mock_client_class):
+    """Verify orchestrator chain executes agents in a pipeline."""
+    orchestrator = Orchestrator()
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(return_value="Output A")
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process = AsyncMock(return_value="Output B")
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    response = await orchestrator.chain("s1", "Start", ["AgentA", "AgentB"])
+    assert response == "Output B"
+    agent_a.process.assert_called_once()
+    agent_b.process.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_process_request_stream(mock_client_class):
+    """Verify process_request_stream handles streaming responses and dynamic handoffs."""
+    from multi_agent_orchestrator.core.agent import AgentHandoff
+
+    orchestrator = Orchestrator()
+
+    async def mock_stream_a(*args, **kwargs):
+        raise AgentHandoff("AgentB", "transfer stream")
+        # To make it an async generator
+        yield "never"
+
+    async def mock_stream_b(*args, **kwargs):
+        yield "Chunk 1"
+        yield " Chunk 2"
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process_stream = mock_stream_a
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process_stream = mock_stream_b
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        chunks = []
+        async for chunk in orchestrator.process_request_stream("s1", "Stream me"):
+            chunks.append(chunk)
+
+    assert chunks == ["Chunk 1", " Chunk 2"]
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_chain_edge_cases(mock_client_class):
+    orchestrator = Orchestrator()
+    # Empty sequence
+    with pytest.raises(OrchestratorError, match="Sequence of agents cannot be empty"):
+        await orchestrator.chain("s1", "Query", [])
+
+    # Unknown agent in sequence
+    with pytest.raises(OrchestratorError, match="Unknown agent in sequence"):
+        await orchestrator.chain("s1", "Query", ["Ghost"])
+
+    # Agent throws exception inside chain
+    agent = MagicMock(spec=BaseAgent)
+    agent.name = "AgentA"
+    agent.process = AsyncMock(side_effect=Exception("Hard crash"))
+    orchestrator.register_agent(agent)
+
+    response = await orchestrator.chain("s1", "Query", ["AgentA"])
+    assert "Chain failed at AgentA: Hard crash" in response
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_process_request_agent_not_found(mock_client_class):
+    orchestrator = Orchestrator()
+    # Mock route to returns agent that doesn't exist
+    with patch.object(orchestrator, "_route_request", return_value="Ghost"):
+        response = await orchestrator.process_request("s1", "Query")
+    assert "Error: Agent 'Ghost' not found" in response
+
+    # Also for stream
+    with patch.object(orchestrator, "_route_request", return_value="Ghost"):
+        chunks = []
+        async for chunk in orchestrator.process_request_stream("s1", "Query"):
+            chunks.append(chunk)
+    assert "Error: Agent 'Ghost' not found" in "".join(chunks)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_process_request_stream_exceptions(mock_client_class):
+    from multi_agent_orchestrator.core.agent import HumanApprovalRequired, AgentError
+
+    orchestrator = Orchestrator()
+
+    # 1. Approval Required
+    async def mock_stream_approval(*args, **kwargs):
+        raise HumanApprovalRequired("some_tool", {}, "paused stream")
+        yield "never"
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process_stream = mock_stream_approval
+    orchestrator.register_agent(agent_a)
+
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        chunks = []
+        async for chunk in orchestrator.process_request_stream("s1", "Query"):
+            chunks.append(chunk)
+    assert "Execution paused. Human approval required for tool 'some_tool'" in "".join(chunks)
+
+    # 2. Agent Error
+    async def mock_stream_error(*args, **kwargs):
+        raise AgentError("Agent is down")
+        yield "never"
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process_stream = mock_stream_error
+    orchestrator.register_agent(agent_b)
+
+    with patch.object(orchestrator, "_route_request", return_value="AgentB"):
+        chunks = []
+        async for chunk in orchestrator.process_request_stream("s1", "Query"):
+            chunks.append(chunk)
+    assert "Error from AgentB: Agent is down" in "".join(chunks)
