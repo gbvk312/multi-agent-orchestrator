@@ -33,6 +33,24 @@ def _is_async_callable(obj: Any) -> bool:
     return False
 
 
+async def _resolve_prompt(
+    prompt: str | Callable[..., Any],
+    query: str,
+) -> str:
+    """Resolve a system prompt that may be a string, sync callable, or async callable."""
+    if not callable(prompt):
+        return prompt
+    if _is_async_callable(prompt):
+        try:
+            return str(await prompt(query))
+        except TypeError:
+            return str(await prompt())
+    try:
+        return str(prompt(query))
+    except TypeError:
+        return str(prompt())
+
+
 class AgentError(Exception):
     """Raised when the agent encounters an unrecoverable error."""
 
@@ -65,7 +83,7 @@ class BaseAgent:
     def __init__(
         self,
         name: str,
-        system_prompt: str | Callable[[], str] | Callable[[str], str],
+        system_prompt: str | Callable[..., Any],
         model: str | None = None,
         tools: list[Callable[..., Any]] | None = None,
         max_retries: int | None = None,
@@ -98,6 +116,14 @@ class BaseAgent:
 
         self.client = genai.Client(api_key=self._api_key)
 
+    async def pre_process(self, query: str, history: list[dict[str, Any]]) -> str:
+        """Hook to transform the query before model invocation. Override in subclasses."""
+        return query
+
+    async def post_process(self, response: str) -> str:
+        """Hook to transform the final response before returning. Override in subclasses."""
+        return response
+
     async def process(
         self,
         query: str,
@@ -123,6 +149,8 @@ class BaseAgent:
         session_id: str,
         event_handler: EventHandler | None,
     ) -> str:
+        query = await self.pre_process(query, history)
+
         if event_handler:
             await event_handler.on_event(AgentStartEvent(session_id, self.name, query))
 
@@ -132,14 +160,7 @@ class BaseAgent:
             contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=query)]))
 
-        prompt_fn = self.system_prompt
-        if callable(prompt_fn):
-            try:
-                system_instruction = prompt_fn(query)  # type: ignore[call-arg]
-            except TypeError:
-                system_instruction = prompt_fn()  # type: ignore[call-arg]
-        else:
-            system_instruction = prompt_fn
+        system_instruction = await _resolve_prompt(self.system_prompt, query)
 
         kwargs: dict[str, Any] = {
             "system_instruction": system_instruction,
@@ -158,7 +179,7 @@ class BaseAgent:
                 return f"[{self.name}] Generation failed or blocked by safety settings."
 
             if not response.function_calls:
-                text_response = response.text or ""
+                text_response = await self.post_process(response.text or "")
                 if event_handler:
                     await event_handler.on_event(AgentFinishEvent(session_id, self.name, text_response))
                 return text_response
@@ -189,7 +210,7 @@ class BaseAgent:
                     )
             contents.append(types.Content(role="user", parts=fn_response_parts))
 
-        return f"[{self.name}] Reached maximum tool execution rounds ({self.max_tool_rounds})."
+        return await self.post_process(f"[{self.name}] Reached maximum tool execution rounds ({self.max_tool_rounds}).")
 
     async def process_stream(
         self,
@@ -199,6 +220,8 @@ class BaseAgent:
         event_handler: EventHandler | None = None,
     ) -> AsyncGenerator[str, None]:
         try:
+            query = await self.pre_process(query, history)
+
             if event_handler:
                 event_start = AgentStartEvent(session_id, self.name, query)
                 await self._await_with_timeout(event_handler.on_event(event_start))
@@ -209,14 +232,7 @@ class BaseAgent:
                 contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
             contents.append(types.Content(role="user", parts=[types.Part.from_text(text=query)]))
 
-            prompt_fn = self.system_prompt
-            if callable(prompt_fn):
-                try:
-                    system_instruction = prompt_fn(query)  # type: ignore[call-arg]
-                except TypeError:
-                    system_instruction = prompt_fn()  # type: ignore[call-arg]
-            else:
-                system_instruction = prompt_fn
+            system_instruction = await _resolve_prompt(self.system_prompt, query)
 
             kwargs: dict[str, Any] = {
                 "system_instruction": system_instruction,

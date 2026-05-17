@@ -876,3 +876,125 @@ async def test_route_request_with_callable_system_prompts(mock_client_class):
     routing_prompt = kwargs["contents"]
     assert "Dynamic query prompt: Route me" in routing_prompt
     assert "Dynamic zero prompt" in routing_prompt
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_handoff_loop_protection(mock_client_class):
+    """Verify that cyclic handoffs are bounded by max_handoffs config."""
+    from multi_agent_orchestrator.core.agent import AgentHandoff
+    from multi_agent_orchestrator.core.config import OrchestratorConfig
+
+    config = OrchestratorConfig(max_handoffs=2, gemini_api_key="mock-key")
+    orchestrator = Orchestrator(config=config)
+
+    # Agent A always hands off to B, and B always hands off to A (infinite cycle)
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(side_effect=AgentHandoff("AgentB", "cycle"))
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process = AsyncMock(side_effect=AgentHandoff("AgentA", "cycle back"))
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        response = await orchestrator.process_request("s1", "Start cycle")
+
+    assert "Exceeded max handoff limit" in response
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_handoff_loop_protection_stream(mock_client_class):
+    """Verify that cyclic handoffs are bounded in streaming mode."""
+    from multi_agent_orchestrator.core.agent import AgentHandoff
+    from multi_agent_orchestrator.core.config import OrchestratorConfig
+
+    config = OrchestratorConfig(max_handoffs=2, gemini_api_key="mock-key")
+    orchestrator = Orchestrator(config=config)
+
+    async def mock_stream_a(*args, **kwargs):
+        raise AgentHandoff("AgentB", "cycle")
+        yield "never"
+
+    async def mock_stream_b(*args, **kwargs):
+        raise AgentHandoff("AgentA", "cycle back")
+        yield "never"
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process_stream = mock_stream_a
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process_stream = mock_stream_b
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    with patch.object(orchestrator, "_route_request", return_value="AgentA"):
+        chunks = []
+        async for chunk in orchestrator.process_request_stream("s1", "Start cycle"):
+            chunks.append(chunk)
+
+    assert "Exceeded max handoff limit" in "".join(chunks)
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_fan_out_non_agent_error_resilience(mock_client_class):
+    """Verify fan_out catches non-AgentError exceptions without crashing all agents."""
+    orchestrator = Orchestrator()
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.process = AsyncMock(return_value="Response A")
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.process = AsyncMock(side_effect=ConnectionError("Network down"))
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    results = await orchestrator.fan_out("s1", "Multi query")
+
+    assert results["AgentA"] == "Response A"
+    assert "Error from AgentB: Network down" in results["AgentB"]
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_route_request_with_async_callable_system_prompt(mock_client_class):
+    """Verify routing correctly resolves async callable prompts for agent descriptions."""
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.text = "AgentA"
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    orchestrator = Orchestrator()
+
+    async def async_prompt(q: str) -> str:
+        return f"Async prompt: {q}"
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.system_prompt = async_prompt
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.system_prompt = "Static prompt"
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    selected = await orchestrator._route_request("Async route")
+    assert selected == "AgentA"
+
+    _, kwargs = mock_client.aio.models.generate_content.call_args
+    routing_prompt = kwargs["contents"]
+    assert "Async prompt: Async route" in routing_prompt

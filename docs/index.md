@@ -7,20 +7,22 @@
 An asynchronous, from-scratch Python framework for building complex multi-agent workflows, powered by Google's Gemini.
 
 ## Features
+
 - **Dynamic Routing**: A smart `Orchestrator` that evaluates user intent and routes prompts to the most capable agent.
-- **Automatic Tool Execution**: Agents automatically execute function calls and feed results back to the model in a loop (up to 5 rounds).
-- **Parallel Execution**: Use the `fan_out` method to execute multiple independent agents concurrently for complex tasks.
-- **Error Handling & Retries**: Built-in exponential backoff for rate limits (429) and server errors, with configurable retry counts.
-- **Context Management & Pluggable Memory**: A bounded `MemoryManager` passes context across agents seamlessly. Swap in Redis, SQLite, or custom backends via the `MemoryBackend` interface.
-- **Security Enhancements**: Fail-fast mechanisms for API keys prevent silent failures.
-- **Gemini Powered**: Uses the `google-genai` SDK to run `gemini-2.5-flash` natively, with full async support.
-- **Production-Ready**: Adheres to high hygiene standards with CI/CD matrix testing and comprehensive code formatting checks.
+- **Automatic Tool Execution**: Agents automatically execute function calls and feed results back to the model in a loop (up to configurable rounds), supporting both sync and async tools.
+- **Sequential Chaining & Parallel Fan-Out**: Pipeline agents sequentially (`chain`) or fan out concurrently (`fan_out`) with configurable concurrency throttle.
+- **Agent Handoffs & HITL**: Agents can transfer control to other agents via `AgentHandoff`, or pause for human approval via `HumanApprovalRequired`.
+- **Lifecycle Hooks**: Subclass `BaseAgent` and override `pre_process` / `post_process` for custom query/response transformation.
+- **Pluggable Memory**: Bounded `MemoryManager` with `InMemoryBackend`, `SQLiteMemoryBackend`, `RedisMemoryBackend`, or custom backends.
+- **Observability**: Full event system via `EventHandler` for tracing agent starts, finishes, tool calls, routing, handoffs, and errors.
+- **Production Safety**: Handoff loop protection, exponential backoff with jitter, configurable error propagation, and 100% test coverage enforced in CI.
+- **Gemini Powered**: Uses the `google-genai` SDK to run `gemini-2.5-flash` natively with full async support.
 
 ## Architecture
 
 1. **User Request** -> `await Orchestrator.process_request()`
 2. **Orchestrator** -> Analyzes the intent using an async LLM router.
-3. **Delegation** -> Hands off the context to the `BaseAgent` (e.g., `ResearchAgent` or `CodingAgent`).
+3. **Delegation** -> Hands off to the `BaseAgent` (e.g., `ResearchAgent` or `CodingAgent`).
 4. **Execution** -> Agent executes tools automatically in a loop until the model produces a text response.
 5. **Memory** -> Response is saved to the bounded session history.
 
@@ -33,12 +35,7 @@ cd multi-agent-orchestrator
 # Using uv (Recommended)
 uv venv
 source .venv/bin/activate
-uv pip install -e ".[dev]"
-
-# Or using standard pip
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+uv pip install -e ".[dev,api,storage]"
 ```
 
 ## Quick Start

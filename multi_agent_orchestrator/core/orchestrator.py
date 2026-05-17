@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from google import genai
 from google.genai import types
 
-from .agent import AgentError, AgentHandoff, BaseAgent, HumanApprovalRequired
+from .agent import AgentError, AgentHandoff, BaseAgent, HumanApprovalRequired, _resolve_prompt
 from .config import OrchestratorConfig
 from .events import (
     EventHandler,
@@ -80,16 +80,10 @@ class Orchestrator:
         agent_desc_list = []
         for name, agent in self.agents.items():
             prompt = agent.system_prompt
-            if callable(prompt):
-                try:
-                    try:
-                        resolved = prompt(query)  # type: ignore[call-arg]
-                    except TypeError:
-                        resolved = prompt()  # type: ignore[call-arg]
-                except Exception:
-                    resolved = str(prompt)
-            else:
-                resolved = prompt
+            try:
+                resolved = await _resolve_prompt(prompt, query)
+            except Exception:
+                resolved = str(prompt)
             agent_desc_list.append(f"- {name}: {resolved[:100]}...")
         agent_descriptions = "\n".join(agent_desc_list)
         routing_prompt = (
@@ -142,8 +136,15 @@ class Orchestrator:
 
             final_response_text = ""
 
-            # Loop to handle agent handoffs
+            # Loop to handle agent handoffs (bounded to prevent infinite cycles)
+            handoff_count = 0
             while True:
+                handoff_count += 1
+                if handoff_count > self._config.max_handoffs:
+                    final_response_text += f"Error: Exceeded max handoff limit ({self._config.max_handoffs})."
+                    logger.error("[%s] Handoff loop detected after %d handoffs", trace_id, self._config.max_handoffs)
+                    break
+
                 target_agent = self.agents.get(target_agent_name)
                 if not target_agent:
                     final_response_text = f"Error: Agent '{target_agent_name}' not found."
@@ -221,7 +222,16 @@ class Orchestrator:
 
             final_response_text = ""
 
+            handoff_count = 0
             while True:
+                handoff_count += 1
+                if handoff_count > self._config.max_handoffs:
+                    err_msg = f"Error: Exceeded max handoff limit ({self._config.max_handoffs})."
+                    yield err_msg
+                    final_response_text += err_msg
+                    logger.error("[%s] Handoff loop detected after %d handoffs", trace_id, self._config.max_handoffs)
+                    break
+
                 target_agent = self.agents.get(target_agent_name)
                 if not target_agent:
                     err_msg = f"Error: Agent '{target_agent_name}' not found."
@@ -359,7 +369,7 @@ class Orchestrator:
                     query, history, session_id=session_id, event_handler=self.event_handler
                 )
                 return name, result
-            except AgentError as e:
+            except Exception as e:
                 logger.error("[%s] Agent %s failed: %s", trace_id, name, e)
                 return name, f"Error from {name}: {e}"
 

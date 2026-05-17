@@ -26,6 +26,7 @@ class OrchestratorConfig(BaseModel):
     temperature: float = Field(default=0.2, ge=0, le=2)
     routing_temperature: float = Field(default=0.0, ge=0, le=2)
     propagate_errors: bool = Field(default=False)
+    max_handoffs: int = Field(default=5, ge=1)
 
     @classmethod
     def from_env(cls, **overrides: Any) -> "OrchestratorConfig":
@@ -40,6 +41,7 @@ class OrchestratorConfig(BaseModel):
             "temperature": float(os.getenv("TEMPERATURE", "0.2")),
             "routing_temperature": float(os.getenv("ROUTING_TEMPERATURE", "0.0")),
             "propagate_errors": os.getenv("PROPAGATE_ERRORS", "false").lower() in ("true", "1", "yes"),
+            "max_handoffs": int(os.getenv("MAX_HANDOFFS", "5")),
         }
         env_map.update(overrides)
         return cls(**env_map)
