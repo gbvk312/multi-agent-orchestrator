@@ -1,19 +1,11 @@
 """Multi-Agent Orchestrator: An async, Gemini-powered multi-agent framework."""
 
+from __future__ import annotations
+
 __version__ = "0.1.0"
 
-from .core import (
-    AgentError,
-    BaseAgent,
-    InMemoryBackend,
-    MemoryBackend,
-    MemoryManager,
-    Orchestrator,
-    OrchestratorError,
-    RedisMemoryBackend,
-    SQLiteMemoryBackend,
-)
-from .core.config import OrchestratorConfig
+from importlib import import_module
+from typing import Any
 
 __all__ = [
     "__version__",
@@ -28,3 +20,28 @@ __all__ = [
     "SQLiteMemoryBackend",
     "OrchestratorConfig",
 ]
+
+
+_EXPORT_MAP = {
+    "BaseAgent": ".core",
+    "AgentError": ".core",
+    "Orchestrator": ".core",
+    "OrchestratorError": ".core",
+    "MemoryManager": ".core",
+    "MemoryBackend": ".core",
+    "InMemoryBackend": ".core",
+    "RedisMemoryBackend": ".core",
+    "SQLiteMemoryBackend": ".core",
+    "OrchestratorConfig": ".core",
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily import exports to avoid requiring optional dependencies on package import."""
+    module_path = _EXPORT_MAP.get(name)
+    if module_path is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(module_path, package=__name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
