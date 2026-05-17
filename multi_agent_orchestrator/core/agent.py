@@ -120,7 +120,9 @@ class BaseAgent:
             fn_response_parts = []
             for call, result in zip(response.function_calls, tool_results, strict=True):
                 if call.name:
-                    fn_response_parts.append(types.Part.from_function_response(name=call.name, response={"result": result}))
+                    fn_response_parts.append(
+                        types.Part.from_function_response(name=call.name, response={"result": result})
+                    )
             contents.append(types.Content(role="user", parts=fn_response_parts))
 
         # If we exhausted rounds, return what we have
@@ -129,7 +131,9 @@ class BaseAgent:
             f" ({self.max_tool_rounds}). Last response may be incomplete."
         )
 
-    async def _call_model_with_retry(self, contents: list[types.Content], config: types.GenerateContentConfig) -> types.GenerateContentResponse:
+    async def _call_model_with_retry(
+        self, contents: list[types.Content], config: types.GenerateContentConfig
+    ) -> types.GenerateContentResponse:
         """Calls the Gemini model with retry logic for transient errors."""
         last_error = None
         for attempt in range(self.max_retries):

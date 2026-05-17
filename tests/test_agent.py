@@ -184,9 +184,11 @@ async def test_base_agent_timeout(mock_client_class):
         await asyncio.sleep(0.1)
         return "Done"
 
-    with patch.object(agent, "_process_inner", side_effect=slow_process):
-        with pytest.raises(AgentError, match="Processing timed out"):
-            await agent.process("query", [])
+    with (
+        patch.object(agent, "_process_inner", side_effect=slow_process),
+        pytest.raises(AgentError, match="Processing timed out"),
+    ):
+        await agent.process("query", [])
 
 
 @pytest.mark.asyncio
@@ -302,8 +304,10 @@ async def test_base_agent_retries_exhausted(mock_client_class):
 
     agent = BaseAgent(name="ExhaustedAgent", system_prompt="Prompt", max_retries=2)
     # Patch asyncio.sleep so we don't actually wait
-    with patch("asyncio.sleep", new_callable=AsyncMock):
-        with pytest.raises(AgentError, match="All 2 retries exhausted"):
-            await agent.process("query", [])
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        pytest.raises(AgentError, match="All 2 retries exhausted"),
+    ):
+        await agent.process("query", [])
     
     assert mock_client.models.generate_content.call_count == 2
