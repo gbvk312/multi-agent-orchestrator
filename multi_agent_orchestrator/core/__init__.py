@@ -4,6 +4,8 @@ from .agent import AgentError, BaseAgent
 from .config import OrchestratorConfig
 from .memory import InMemoryBackend, MemoryBackend, MemoryManager
 from .orchestrator import Orchestrator, OrchestratorError
+from .redis_backend import RedisMemoryBackend
+from .sqlite_backend import SQLiteMemoryBackend
 
 __all__ = [
     "BaseAgent",
@@ -13,5 +15,7 @@ __all__ = [
     "MemoryManager",
     "MemoryBackend",
     "InMemoryBackend",
+    "RedisMemoryBackend",
+    "SQLiteMemoryBackend",
     "OrchestratorConfig",
 ]

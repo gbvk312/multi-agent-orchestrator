@@ -2,9 +2,18 @@
 
 __version__ = "0.1.0"
 
-from .core import AgentError, BaseAgent, MemoryManager, Orchestrator, OrchestratorError
+from .core import (
+    AgentError,
+    BaseAgent,
+    InMemoryBackend,
+    MemoryBackend,
+    MemoryManager,
+    Orchestrator,
+    OrchestratorError,
+    RedisMemoryBackend,
+    SQLiteMemoryBackend,
+)
 from .core.config import OrchestratorConfig
-from .core.memory import InMemoryBackend, MemoryBackend
 
 __all__ = [
     "__version__",
@@ -15,5 +24,7 @@ __all__ = [
     "MemoryManager",
     "MemoryBackend",
     "InMemoryBackend",
+    "RedisMemoryBackend",
+    "SQLiteMemoryBackend",
     "OrchestratorConfig",
 ]
