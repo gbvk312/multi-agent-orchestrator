@@ -10,7 +10,7 @@ def write_python_function(function_name: str, purpose: str) -> str:
     return f"def {function_name}():\n    # TODO: {purpose}\n    pass\n"
 
 
-async def main():
+async def main() -> None:
     # Load environment variables from .env
     from dotenv import load_dotenv
 

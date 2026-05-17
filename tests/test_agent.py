@@ -49,10 +49,11 @@ def test_base_agent_repr(mock_client):
 async def test_base_agent_process(mock_client_class):
     """Verify that process() awaits the model and returns text."""
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
     mock_response = MagicMock()
     mock_response.text = "Mocked response"
     mock_response.function_calls = None
-    mock_client.models.generate_content.return_value = mock_response
+    mock_client.aio.models.generate_content.return_value = mock_response
 
     agent = BaseAgent(name="TestAgent", system_prompt="System Prompt")
     history = [
@@ -65,8 +66,8 @@ async def test_base_agent_process(mock_client_class):
     assert response == "Mocked response"
 
     # Verify generate_content was called with correct structure
-    mock_client.models.generate_content.assert_called_once()
-    _, kwargs = mock_client.models.generate_content.call_args
+    mock_client.aio.models.generate_content.assert_called_once()
+    _, kwargs = mock_client.aio.models.generate_content.call_args
 
     assert kwargs["model"] == "gemini-2.5-flash"
     contents = kwargs["contents"]
@@ -84,6 +85,7 @@ async def test_base_agent_process(mock_client_class):
 async def test_base_agent_tool_call(mock_client_class):
     """Verify the full tool-call loop: model requests tool -> agent executes -> model returns text."""
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
 
     # Define a real tool function for the agent
     def get_weather(location: str) -> str:
@@ -104,13 +106,13 @@ async def test_base_agent_tool_call(mock_client_class):
     mock_final_response.function_calls = None
     mock_final_response.text = "It's sunny in London!"
 
-    mock_client.models.generate_content.side_effect = [mock_tool_response, mock_final_response]
+    mock_client.aio.models.generate_content.side_effect = [mock_tool_response, mock_final_response]
 
     agent = BaseAgent(name="WeatherAgent", system_prompt="Weather prompt", tools=[get_weather])
     response = await agent.process("What's the weather?", [])
 
     assert response == "It's sunny in London!"
-    assert mock_client.models.generate_content.call_count == 2
+    assert mock_client.aio.models.generate_content.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -118,6 +120,7 @@ async def test_base_agent_tool_call(mock_client_class):
 async def test_base_agent_unknown_tool(mock_client_class):
     """Agent should return an error string when model calls an unregistered tool."""
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
 
     # Model requests a tool the agent doesn't have
     mock_fn_call = MagicMock()
@@ -134,7 +137,7 @@ async def test_base_agent_unknown_tool(mock_client_class):
     mock_final_response.function_calls = None
     mock_final_response.text = "I couldn't find that tool."
 
-    mock_client.models.generate_content.side_effect = [mock_tool_response, mock_final_response]
+    mock_client.aio.models.generate_content.side_effect = [mock_tool_response, mock_final_response]
 
     agent = BaseAgent(name="TestAgent", system_prompt="Prompt")
     response = await agent.process("Do something", [])
@@ -147,13 +150,14 @@ async def test_base_agent_unknown_tool(mock_client_class):
 async def test_base_agent_retry_on_429(mock_client_class):
     """Verify exponential backoff on rate limit errors."""
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
 
     mock_response = MagicMock()
     mock_response.text = "Success after retry"
     mock_response.function_calls = None
 
     # First call raises 429, second succeeds
-    mock_client.models.generate_content.side_effect = [
+    mock_client.aio.models.generate_content.side_effect = [
         Exception("429 Resource Exhausted"),
         mock_response,
     ]
@@ -162,7 +166,7 @@ async def test_base_agent_retry_on_429(mock_client_class):
     response = await agent.process("query", [])
 
     assert response == "Success after retry"
-    assert mock_client.models.generate_content.call_count == 2
+    assert mock_client.aio.models.generate_content.call_count == 2
 
 
 def test_base_agent_missing_api_key(monkeypatch):
@@ -196,6 +200,7 @@ async def test_base_agent_timeout(mock_client_class):
 async def test_base_agent_max_tool_rounds(mock_client_class):
     """Verify it stops after max_tool_rounds."""
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
     agent = BaseAgent(name="MaxToolAgent", system_prompt="Prompt", max_tool_rounds=1, tools=[lambda x: x])
 
     mock_fn_call = MagicMock()
@@ -207,7 +212,7 @@ async def test_base_agent_max_tool_rounds(mock_client_class):
     mock_tool_response.candidates = [MagicMock()]
     mock_tool_response.candidates[0].content = types.Content(role="model", parts=[])
 
-    mock_client.models.generate_content.return_value = mock_tool_response
+    mock_client.aio.models.generate_content.return_value = mock_tool_response
 
     response = await agent.process("query", [])
     assert "Reached maximum tool execution rounds" in response
@@ -218,7 +223,8 @@ async def test_base_agent_max_tool_rounds(mock_client_class):
 async def test_base_agent_unrecoverable_model_error(mock_client_class):
     """Verify generic model errors are raised immediately."""
     mock_client = mock_client_class.return_value
-    mock_client.models.generate_content.side_effect = Exception("Some weird error")
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_client.aio.models.generate_content.side_effect = Exception("Some weird error")
 
     agent = BaseAgent(name="ErrorAgent", system_prompt="Prompt")
     with pytest.raises(AgentError, match="Model call failed: Some weird error"):
@@ -230,6 +236,7 @@ async def test_base_agent_unrecoverable_model_error(mock_client_class):
 async def test_base_agent_tool_exception(mock_client_class):
     """Verify tool exceptions are caught and returned as string."""
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
 
     def failing_tool():
         raise ValueError("Tool failed miserably")
@@ -247,13 +254,13 @@ async def test_base_agent_tool_exception(mock_client_class):
     mock_final_response.function_calls = None
     mock_final_response.text = "Handled"
 
-    mock_client.models.generate_content.side_effect = [mock_tool_response, mock_final_response]
+    mock_client.aio.models.generate_content.side_effect = [mock_tool_response, mock_final_response]
 
     agent = BaseAgent(name="FailingToolAgent", system_prompt="Prompt", tools=[failing_tool])
     await agent.process("query", [])
 
     # We can check what was passed to the 2nd model call
-    _, kwargs = mock_client.models.generate_content.call_args
+    _, kwargs = mock_client.aio.models.generate_content.call_args
     contents = kwargs["contents"]
     fn_response_part = contents[-1].parts[0]
     # Check if the string representation contains the error message
@@ -266,6 +273,7 @@ async def test_base_agent_tool_exception(mock_client_class):
 async def test_base_agent_async_tool(mock_client_class):
     """Verify async tools are supported."""
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
 
     async def async_tool():
         return "Async Result"
@@ -283,13 +291,13 @@ async def test_base_agent_async_tool(mock_client_class):
     mock_final_response.function_calls = None
     mock_final_response.text = "Handled Async"
 
-    mock_client.models.generate_content.side_effect = [mock_tool_response, mock_final_response]
+    mock_client.aio.models.generate_content.side_effect = [mock_tool_response, mock_final_response]
 
     agent = BaseAgent(name="AsyncToolAgent", system_prompt="Prompt", tools=[async_tool])
     response = await agent.process("query", [])
 
     assert response == "Handled Async"
-    _, kwargs = mock_client.models.generate_content.call_args
+    _, kwargs = mock_client.aio.models.generate_content.call_args
     contents = kwargs["contents"]
     fn_response_part = contents[-1].parts[0]
     assert "Async Result" in str(fn_response_part.function_response)
@@ -300,7 +308,8 @@ async def test_base_agent_async_tool(mock_client_class):
 async def test_base_agent_retries_exhausted(mock_client_class):
     """Verify that after max_retries of 429 errors, it raises AgentError."""
     mock_client = mock_client_class.return_value
-    mock_client.models.generate_content.side_effect = Exception("429 Too Many Requests")
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_client.aio.models.generate_content.side_effect = Exception("429 Too Many Requests")
 
     agent = BaseAgent(name="ExhaustedAgent", system_prompt="Prompt", max_retries=2)
     # Patch asyncio.sleep so we don't actually wait
@@ -310,4 +319,18 @@ async def test_base_agent_retries_exhausted(mock_client_class):
     ):
         await agent.process("query", [])
     
-    assert mock_client.models.generate_content.call_count == 2
+    assert mock_client.aio.models.generate_content.call_count == 2
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.agent.genai.Client")
+async def test_base_agent_no_candidates(mock_client_class):
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.candidates = []
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    agent = BaseAgent(name="TestAgent", system_prompt="Prompt")
+    response = await agent.process("query", [])
+    assert "Generation failed or blocked by safety settings" in response

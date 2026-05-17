@@ -65,9 +65,10 @@ def test_register_duplicate_agent_warns(mock_client, caplog):
 @patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
 async def test_route_request(mock_client_class):
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
     mock_response = MagicMock()
     mock_response.text = "AgentB"
-    mock_client.models.generate_content.return_value = mock_response
+    mock_client.aio.models.generate_content.return_value = mock_response
 
     orchestrator = Orchestrator()
 
@@ -84,7 +85,7 @@ async def test_route_request(mock_client_class):
 
     selected = await orchestrator._route_request("How to code?")
     assert selected == "AgentB"
-    mock_client.models.generate_content.assert_called_once()
+    mock_client.aio.models.generate_content.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -92,6 +93,7 @@ async def test_route_request(mock_client_class):
 async def test_route_request_single_agent_skips_llm(mock_client_class):
     """With only one agent, routing should skip the LLM call entirely."""
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
 
     orchestrator = Orchestrator()
     agent = MagicMock(spec=BaseAgent)
@@ -103,16 +105,17 @@ async def test_route_request_single_agent_skips_llm(mock_client_class):
     assert selected == "OnlyAgent"
 
     # LLM should NOT be called
-    mock_client.models.generate_content.assert_not_called()
+    mock_client.aio.models.generate_content.assert_not_called()
 
 
 @pytest.mark.asyncio
 @patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
 async def test_route_request_fallback(mock_client_class):
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
     mock_response = MagicMock()
     mock_response.text = "UnknownAgent"  # Not registered
-    mock_client.models.generate_content.return_value = mock_response
+    mock_client.aio.models.generate_content.return_value = mock_response
 
     orchestrator = Orchestrator()
     agent_a = MagicMock(spec=BaseAgent)
@@ -144,11 +147,12 @@ async def test_route_request_no_agents_raises(mock_client_class):
 @patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
 async def test_process_request(mock_client_class):
     mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
 
     # Mock routing response
     mock_route_response = MagicMock()
     mock_route_response.text = "AgentA"
-    mock_client.models.generate_content.return_value = mock_route_response
+    mock_client.aio.models.generate_content.return_value = mock_route_response
 
     orchestrator = Orchestrator()
 
@@ -236,7 +240,8 @@ def test_orchestrator_missing_api_key(mock_client, monkeypatch):
 async def test_route_request_llm_exception_fallback(mock_client_class):
     """Verify routing falls back to the first agent if the LLM raises an exception."""
     mock_client = mock_client_class.return_value
-    mock_client.models.generate_content.side_effect = Exception("API Error")
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_client.aio.models.generate_content.side_effect = Exception("API Error")
 
     orchestrator = Orchestrator()
     agent_a = MagicMock(spec=BaseAgent)

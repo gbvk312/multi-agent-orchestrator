@@ -86,8 +86,7 @@ you must decide which agent is best suited to handle the request.
         """
 
         try:
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=routing_prompt,
                 config=types.GenerateContentConfig(temperature=self._config.routing_temperature),
