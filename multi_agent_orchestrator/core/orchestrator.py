@@ -2,12 +2,14 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import AsyncGenerator
 
 from google import genai
 from google.genai import types
 
-from .agent import AgentError, BaseAgent
+from .agent import AgentError, AgentHandoff, BaseAgent, HumanApprovalRequired
 from .config import OrchestratorConfig
+from .events import EventHandler
 from .memory import MemoryManager
 
 logger = logging.getLogger(__name__)
@@ -18,14 +20,7 @@ class OrchestratorError(Exception):
 
 
 class Orchestrator:
-    """Central router that delegates tasks to specialized agents.
-
-    The orchestrator uses an LLM-based router to analyze user intent
-    and select the most appropriate agent. All processing is async.
-
-    Accepts an optional ``OrchestratorConfig``; when omitted the config
-    is built from environment variables via ``OrchestratorConfig.from_env()``.
-    """
+    """Central router that delegates tasks to specialized agents."""
 
     def __init__(
         self,
@@ -33,59 +28,44 @@ class Orchestrator:
         model: str | None = None,
         api_key: str | None = None,
         config: OrchestratorConfig | None = None,
+        event_handler: EventHandler | None = None,
     ):
         self._config = config or OrchestratorConfig.from_env()
 
         self.agents: dict[str, BaseAgent] = {}
         self.memory = memory_manager or MemoryManager(max_history=self._config.max_history)
         self.model = model or self._config.default_model
+        self.event_handler = event_handler
 
-        # Validate API key early
         self._api_key = api_key or self._config.gemini_api_key
         if not self._api_key:
             raise OrchestratorError("GEMINI_API_KEY environment variable or api_key parameter is required")
         self.client = genai.Client(api_key=self._api_key)
 
     def register_agent(self, agent: BaseAgent) -> None:
-        """Registers an agent with the orchestrator."""
         if agent.name in self.agents:
             logger.warning("Overwriting existing agent: %s", agent.name)
         self.agents[agent.name] = agent
 
     def unregister_agent(self, name: str) -> bool:
-        """Removes a registered agent. Returns True if the agent existed."""
         return self.agents.pop(name, None) is not None
 
     async def _route_request(self, query: str) -> str:
-        """Determines which agent should handle the request."""
         if not self.agents:
             raise OrchestratorError("No agents registered with the orchestrator.")
-
         agent_names = list(self.agents.keys())
-
-        # If only one agent, skip routing
         if len(agent_names) == 1:
             return agent_names[0]
 
         agent_descriptions = "\n".join(
-            [
-                f"- {name}: {agent.system_prompt[:100]}{'...' if len(agent.system_prompt) > 100 else ''}"
-                for name, agent in self.agents.items()
-            ]
+            [f"- {name}: {agent.system_prompt[:100]}..." for name, agent in self.agents.items()]
         )
-
-        routing_prompt = f"""
-        You are a routing supervisor. Based on the user's query, \
-you must decide which agent is best suited to handle the request.
-
-        Available agents:
-        {agent_descriptions}
-
-        User Query: "{query}"
-        """
-
+        routing_prompt = (
+            "You are a routing supervisor. Based on the user's query, "
+            "you must decide which agent is best suited to handle the request.\n\n"
+            f"Available agents:\n{agent_descriptions}\n\nUser Query: \"{query}\""
+        )
         schema = types.Schema(type=types.Type.STRING, enum=agent_names)
-
         try:
             response = await self.client.aio.models.generate_content(
                 model=self.model,
@@ -96,19 +76,15 @@ you must decide which agent is best suited to handle the request.
                     response_schema=schema,
                 ),
             )
-
             if response.text:
                 try:
                     selected_agent = str(json.loads(response.text))
                 except json.JSONDecodeError:
                     selected_agent = str(response.text.strip().strip('"'))
-
                 if selected_agent in self.agents:
                     return selected_agent
         except Exception as e:
             logger.warning("Routing LLM call failed (%s), falling back to first agent.", e)
-
-        # Fallback to the first registered agent
         return agent_names[0]
 
     async def process_request(self, session_id: str, query: str) -> str:
@@ -116,27 +92,161 @@ you must decide which agent is best suited to handle the request.
         trace_id = uuid.uuid4().hex[:12]
         logger.info("[%s] Processing request for session=%s", trace_id, session_id)
 
-        # 1. Determine which agent should handle this
         target_agent_name = await self._route_request(query)
-        target_agent = self.agents[target_agent_name]
-
-        # 2. Get session history BEFORE adding current query
+        current_query = query
         history = await self.memory.get_history(session_id)
+        
+        final_response_text = ""
 
-        # 3. Delegate to the agent
-        logger.info("[%s] Routing to -> %s", trace_id, target_agent_name)
+        # Loop to handle agent handoffs
+        while True:
+            target_agent = self.agents.get(target_agent_name)
+            if not target_agent:
+                final_response_text = f"Error: Agent '{target_agent_name}' not found."
+                break
 
-        try:
-            response_text = await target_agent.process(query, history)
-        except AgentError as e:
-            response_text = f"Error from {target_agent_name}: {e}"
-            logger.error("[%s] %s", trace_id, response_text)
+            logger.info("[%s] Routing to -> %s", trace_id, target_agent_name)
 
-        # 4. Save BOTH messages to memory AFTER processing
+            try:
+                response_text = await target_agent.process(
+                    current_query, 
+                    history, 
+                    session_id=session_id, 
+                    event_handler=self.event_handler
+                )
+                final_response_text += response_text
+                break  # Done processing
+                
+            except AgentHandoff as handoff:
+                logger.info("[%s] Agent %s handing off to %s", trace_id, target_agent_name, handoff.target_agent)
+                if handoff.message:
+                    history.append(
+                        {"role": "model", "content": f"Handing off to {handoff.target_agent}: {handoff.message}"}
+                    )
+                    current_query = handoff.message
+                target_agent_name = handoff.target_agent
+                
+            except HumanApprovalRequired as approval:
+                final_response_text = (
+                    f"Execution paused. Human approval required for tool '{approval.tool_name}' "
+                    f"with args {approval.tool_args}. Message: {approval.message}"
+                )
+                break
+                
+            except AgentError as e:
+                final_response_text = f"Error from {target_agent_name}: {e}"
+                logger.error("[%s] %s", trace_id, final_response_text)
+                break
+
         await self.memory.add_message(session_id, "user", query)
-        await self.memory.add_message(session_id, "model", response_text)
+        await self.memory.add_message(session_id, "model", final_response_text)
 
-        return response_text
+        return final_response_text
+
+    async def process_request_stream(self, session_id: str, query: str) -> AsyncGenerator[str, None]:
+        """Processes a user request and streams the response."""
+        trace_id = uuid.uuid4().hex[:12]
+        logger.info("[%s] Streaming request for session=%s", trace_id, session_id)
+
+        target_agent_name = await self._route_request(query)
+        current_query = query
+        history = await self.memory.get_history(session_id)
+        
+        final_response_text = ""
+
+        while True:
+            target_agent = self.agents.get(target_agent_name)
+            if not target_agent:
+                err_msg = f"Error: Agent '{target_agent_name}' not found."
+                yield err_msg
+                final_response_text += err_msg
+                break
+
+            logger.info("[%s] Routing to -> %s", trace_id, target_agent_name)
+
+            try:
+                async for chunk in target_agent.process_stream(
+                    current_query, 
+                    history, 
+                    session_id=session_id, 
+                    event_handler=self.event_handler
+                ):
+                    yield chunk
+                    final_response_text += chunk
+                break
+                
+            except AgentHandoff as handoff:
+                logger.info("[%s] Agent %s handing off to %s", trace_id, target_agent_name, handoff.target_agent)
+                if handoff.message:
+                    history.append(
+                        {"role": "model", "content": f"Handing off to {handoff.target_agent}: {handoff.message}"}
+                    )
+                    current_query = handoff.message
+                target_agent_name = handoff.target_agent
+                
+            except HumanApprovalRequired as approval:
+                msg = (
+                    f"\nExecution paused. Human approval required for tool "
+                    f"'{approval.tool_name}'. Message: {approval.message}"
+                )
+                yield msg
+                final_response_text += msg
+                break
+                
+            except AgentError as e:
+                msg = f"\nError from {target_agent_name}: {e}"
+                yield msg
+                final_response_text += msg
+                logger.error("[%s] %s", trace_id, msg)
+                break
+
+        await self.memory.add_message(session_id, "user", query)
+        await self.memory.add_message(session_id, "model", final_response_text)
+
+    async def chain(
+        self,
+        session_id: str,
+        query: str,
+        sequence: list[str],
+    ) -> str:
+        """Execute agents sequentially in a pipeline."""
+        if not sequence:
+            raise OrchestratorError("Sequence of agents cannot be empty.")
+            
+        current_query = query
+        final_response = ""
+        
+        for agent_name in sequence:
+            if agent_name not in self.agents:
+                raise OrchestratorError(f"Unknown agent in sequence: {agent_name}")
+                
+            agent = self.agents[agent_name]
+            history = await self.memory.get_history(session_id)
+            
+            try:
+                response = await agent.process(
+                    current_query, 
+                    history, 
+                    session_id=session_id, 
+                    event_handler=self.event_handler
+                )
+                
+                # Append to history so next agent sees it
+                await self.memory.add_message(session_id, "user", current_query)
+                await self.memory.add_message(session_id, "model", f"[{agent_name} output]: {response}")
+                
+                # Output of current agent becomes input for next
+                current_query = (
+                    f"Here is the output from the previous step ({agent_name}). "
+                    f"Please continue the workflow: {response}"
+                )
+                final_response = response
+                
+            except Exception as e:
+                logger.error("Error in chain at agent %s: %s", agent_name, e)
+                return f"Chain failed at {agent_name}: {e}"
+                
+        return final_response
 
     async def fan_out(
         self,
@@ -144,20 +254,9 @@ you must decide which agent is best suited to handle the request.
         query: str,
         agent_names: list[str] | None = None,
     ) -> dict[str, str]:
-        """Execute multiple agents in parallel and return all results.
-
-        Args:
-            session_id: Session identifier for context retrieval.
-            query: The user query to process.
-            agent_names: Optional list of agent names to run. Defaults to all.
-
-        Returns:
-            Dict mapping agent names to their responses.
-        """
+        """Execute multiple agents in parallel and return all results."""
         trace_id = uuid.uuid4().hex[:12]
         targets = agent_names or list(self.agents.keys())
-
-        # Validate all target agents exist
         unknown = [n for n in targets if n not in self.agents]
         if unknown:
             raise OrchestratorError(f"Unknown agents: {unknown}")
@@ -167,7 +266,12 @@ you must decide which agent is best suited to handle the request.
 
         async def _run_agent(name: str) -> tuple[str, str]:
             try:
-                result = await self.agents[name].process(query, history)
+                result = await self.agents[name].process(
+                    query, 
+                    history, 
+                    session_id=session_id, 
+                    event_handler=self.event_handler
+                )
                 return name, result
             except AgentError as e:
                 logger.error("[%s] Agent %s failed: %s", trace_id, name, e)
@@ -176,7 +280,6 @@ you must decide which agent is best suited to handle the request.
         results_list = await asyncio.gather(*[_run_agent(n) for n in targets])
         results = dict(results_list)
 
-        # Persist the query and a combined summary to memory
         await self.memory.add_message(session_id, "user", query)
         summary_parts = [f"[{name}]: {resp}" for name, resp in results.items()]
         await self.memory.add_message(session_id, "model", "\n\n".join(summary_parts))

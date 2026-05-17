@@ -21,12 +21,21 @@ class MemoryBackend(ABC):
     async def delete(self, session_id: str) -> None:
         """Delete conversation history for a session."""
 
+    @abstractmethod
+    async def load_state(self, session_id: str) -> dict[str, Any]:
+        """Load shared state for a session."""
+
+    @abstractmethod
+    async def save_state(self, session_id: str, state: dict[str, Any]) -> None:
+        """Persist shared state for a session."""
+
 
 class InMemoryBackend(MemoryBackend):
     """In-process dictionary-based memory backend (default)."""
 
     def __init__(self) -> None:
         self._store: dict[str, list[dict[str, Any]]] = {}
+        self._state_store: dict[str, dict[str, Any]] = {}
 
     async def load(self, session_id: str) -> list[dict[str, Any]]:
         return list(self._store.get(session_id, []))
@@ -36,6 +45,13 @@ class InMemoryBackend(MemoryBackend):
 
     async def delete(self, session_id: str) -> None:
         self._store.pop(session_id, None)
+        self._state_store.pop(session_id, None)
+
+    async def load_state(self, session_id: str) -> dict[str, Any]:
+        return dict(self._state_store.get(session_id, {}))
+
+    async def save_state(self, session_id: str, state: dict[str, Any]) -> None:
+        self._state_store[session_id] = state
 
 
 class MemoryManager:
@@ -84,6 +100,18 @@ class MemoryManager:
             await self._backend.delete(session_id)
             # Clean up the lock entry to prevent unbounded growth
             self._locks.pop(session_id, None)
+
+    async def get_state(self, session_id: str) -> dict[str, Any]:
+        """Retrieves the shared state for a given session."""
+        async with self._get_lock(session_id):
+            return await self._backend.load_state(session_id)
+
+    async def update_state(self, session_id: str, updates: dict[str, Any]) -> None:
+        """Updates the shared state with new key-value pairs."""
+        async with self._get_lock(session_id):
+            state = await self._backend.load_state(session_id)
+            state.update(updates)
+            await self._backend.save_state(session_id, state)
 
     def __repr__(self) -> str:
         return f"MemoryManager(max_history={self.max_history}, backend={self._backend.__class__.__name__})"

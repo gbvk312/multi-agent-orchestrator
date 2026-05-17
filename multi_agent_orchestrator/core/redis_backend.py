@@ -28,3 +28,13 @@ class RedisMemoryBackend(MemoryBackend):
 
     async def delete(self, session_id: str) -> None:
         await self._redis.delete(self._key(session_id))
+        await self._redis.delete(self._key(session_id) + ":state")
+
+    async def load_state(self, session_id: str) -> dict[str, Any]:
+        data = await self._redis.get(self._key(session_id) + ":state")
+        if data:
+            return cast(dict[str, Any], json.loads(data))
+        return {}
+
+    async def save_state(self, session_id: str, state: dict[str, Any]) -> None:
+        await self._redis.set(self._key(session_id) + ":state", json.dumps(state))
