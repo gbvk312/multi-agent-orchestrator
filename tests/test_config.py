@@ -132,3 +132,14 @@ def test_config_validation_max_handoffs():
     """max_handoffs must be >= 1."""
     with pytest.raises(ValidationError):
         OrchestratorConfig(max_handoffs=0)
+
+
+def test_config_routing_system_instruction_defaults_and_env(monkeypatch):
+    """Verify default value and environment reading for routing_system_instruction."""
+    config = OrchestratorConfig()
+    assert "You are a routing supervisor" in config.routing_system_instruction
+
+    monkeypatch.setenv("ROUTING_SYSTEM_INSTRUCTION", "Custom Supervisor Instructions")
+    config_env = OrchestratorConfig.from_env()
+    assert config_env.routing_system_instruction == "Custom Supervisor Instructions"
+

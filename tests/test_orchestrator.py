@@ -1276,3 +1276,55 @@ async def test_orchestrator_context_propagation():
         memory=orchestrator.memory,
         context=test_context,
     )
+
+
+@pytest.mark.asyncio
+@patch("multi_agent_orchestrator.core.orchestrator.genai.Client")
+async def test_orchestrator_custom_routing_instruction_and_dynamic_prompt_resolution(mock_client_class):
+    mock_client = mock_client_class.return_value
+    mock_client.aio.models.generate_content = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.text = "AgentB"
+    mock_client.aio.models.generate_content.return_value = mock_response
+
+    # Create orchestrator with a custom routing instruction
+    custom_instruction = "You are a very strict router."
+    orchestrator = Orchestrator(routing_system_instruction=custom_instruction)
+    assert orchestrator.routing_system_instruction == custom_instruction
+
+    # Create dynamic prompts
+    resolved_calls = []
+
+    def dynamic_prompt_a(query, session_id, context):
+        resolved_calls.append((query, session_id, context))
+        return f"A_prompt_for_{session_id}_{context.get('k')}"
+
+    agent_a = MagicMock(spec=BaseAgent)
+    agent_a.name = "AgentA"
+    agent_a.system_prompt = dynamic_prompt_a
+
+    agent_b = MagicMock(spec=BaseAgent)
+    agent_b.name = "AgentB"
+    agent_b.system_prompt = "Simple Prompt B"
+
+    orchestrator.register_agent(agent_a)
+    orchestrator.register_agent(agent_b)
+
+    # Route the request
+    test_context = {"k": "v"}
+    selected = await orchestrator._route_request("Test Query", session_id="session-456", context=test_context)
+    assert selected == "AgentB"
+
+    # Verify that the callable prompt was resolved with query, session_id, and context
+    assert len(resolved_calls) == 1
+    assert resolved_calls[0] == ("Test Query", "session-456", test_context)
+
+    # Verify that the LLM was called with the custom routing instruction in the prompt
+    mock_client.aio.models.generate_content.assert_called_once()
+    _, kwargs = mock_client.aio.models.generate_content.call_args
+    prompt_text = kwargs["contents"]
+
+    assert custom_instruction in prompt_text
+    assert "A_prompt_for_session-456_v" in prompt_text
+    assert "Simple Prompt B" in prompt_text
+

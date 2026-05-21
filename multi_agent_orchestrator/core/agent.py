@@ -36,19 +36,57 @@ def _is_async_callable(obj: Any) -> bool:
 async def _resolve_prompt(
     prompt: str | Callable[..., Any],
     query: str,
+    session_id: str = "",
+    context: dict[str, Any] | None = None,
 ) -> str:
-    """Resolve a system prompt that may be a string, sync callable, or async callable."""
+    """Resolve a system prompt that may be a string, sync callable, or async callable.
+
+    Supports dynamic injection of query, session_id, and context depending on
+    the signature of the prompt callable.
+    """
     if not callable(prompt):
         return prompt
+
+    try:
+        sig = inspect.signature(prompt)
+        params = sig.parameters
+    except (ValueError, TypeError):
+        params = {}
+
+    kwargs: dict[str, Any] = {}
+    has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    if "query" in params or has_var_keyword:
+        kwargs["query"] = query
+    if "session_id" in params or has_var_keyword:
+        kwargs["session_id"] = session_id
+    if "context" in params or has_var_keyword:
+        kwargs["context"] = context or {}
+
+    # If kwargs is empty and there are positional/keyword arguments:
+    if not kwargs and params:
+        # Check if first param is positional
+        first_param = list(params.values())[0]
+        if first_param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            # We'll pass query as positional/keyword argument
+            kwargs[first_param.name] = query
+
     if _is_async_callable(prompt):
         try:
-            return str(await prompt(query))
+            return str(await prompt(**kwargs))
         except TypeError:
-            return str(await prompt())
-    try:
-        return str(prompt(query))
-    except TypeError:
-        return str(prompt())
+            try:
+                return str(await prompt(query))
+            except TypeError:
+                return str(await prompt())
+    else:
+        try:
+            return str(prompt(**kwargs))
+        except TypeError:
+            try:
+                return str(prompt(query))
+            except TypeError:
+                return str(prompt())
 
 
 class AgentError(Exception):
@@ -170,7 +208,7 @@ class BaseAgent:
             contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=query)]))
 
-        system_instruction = await _resolve_prompt(self.system_prompt, query)
+        system_instruction = await _resolve_prompt(self.system_prompt, query, session_id=session_id, context=context)
 
         kwargs: dict[str, Any] = {
             "system_instruction": system_instruction,
@@ -244,7 +282,7 @@ class BaseAgent:
                 contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
             contents.append(types.Content(role="user", parts=[types.Part.from_text(text=query)]))
 
-            system_instruction = await _resolve_prompt(self.system_prompt, query)
+            system_instruction = await _resolve_prompt(self.system_prompt, query, session_id=session_id, context=context)
 
             kwargs: dict[str, Any] = {
                 "system_instruction": system_instruction,

@@ -42,6 +42,7 @@ class Orchestrator:
         event_handler: EventHandler | None = None,
         default_fallback_agent: str | None = None,
         routing_handler: Callable[[str, dict[str, BaseAgent]], Awaitable[str]] | None = None,
+        routing_system_instruction: str | None = None,
     ):
         self._config = config or OrchestratorConfig.from_env()
 
@@ -51,6 +52,7 @@ class Orchestrator:
         self.event_handler = event_handler
         self.default_fallback_agent = default_fallback_agent
         self.routing_handler = routing_handler
+        self.routing_system_instruction = routing_system_instruction or self._config.routing_system_instruction
 
         self._api_key = api_key or self._config.gemini_api_key
         if not self._api_key:
@@ -65,7 +67,7 @@ class Orchestrator:
     def unregister_agent(self, name: str) -> bool:
         return self.agents.pop(name, None) is not None
 
-    async def _route_request(self, query: str) -> str:
+    async def _route_request(self, query: str, session_id: str = "", context: dict[str, Any] | None = None) -> str:
         if not self.agents:
             raise OrchestratorError("No agents registered with the orchestrator.")
         agent_names = list(self.agents.keys())
@@ -85,15 +87,18 @@ class Orchestrator:
         for name, agent in self.agents.items():
             prompt = agent.system_prompt
             try:
-                resolved = await _resolve_prompt(prompt, query)
+                resolved = await _resolve_prompt(prompt, query, session_id=session_id, context=context)
             except Exception:
                 resolved = str(prompt)
             agent_desc_list.append(f"- {name}: {resolved[:100]}...")
         agent_descriptions = "\n".join(agent_desc_list)
+        routing_system_instruction = (
+            self.routing_system_instruction
+            or "You are a routing supervisor. Based on the user's query, you must decide which agent is best suited to handle the request."
+        )
         routing_prompt = (
-            "You are a routing supervisor. Based on the user's query, "
-            "you must decide which agent is best suited to handle the request.\n\n"
-            f'Available agents:\n{agent_descriptions}\n\nUser Query: "{query}"'
+            f"{routing_system_instruction}\n\n"
+            f"Available agents:\n{agent_descriptions}\n\nUser Query: \"{query}\""
         )
         schema = types.Schema(type=types.Type.STRING, enum=agent_names)
         try:
@@ -142,7 +147,7 @@ class Orchestrator:
             await self.event_handler.on_event(OrchestratorStartEvent(session_id, query))
 
         try:
-            target_agent_name = await self._route_request(query)
+            target_agent_name = await self._route_request(query, session_id=session_id, context=context)
             if self.event_handler:
                 await self.event_handler.on_event(OrchestratorRouteEvent(session_id, query, target_agent_name))
 
@@ -239,7 +244,7 @@ class Orchestrator:
             await self.event_handler.on_event(OrchestratorStartEvent(session_id, query))
 
         try:
-            target_agent_name = await self._route_request(query)
+            target_agent_name = await self._route_request(query, session_id=session_id, context=context)
             if self.event_handler:
                 await self.event_handler.on_event(OrchestratorRouteEvent(session_id, query, target_agent_name))
 
