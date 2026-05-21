@@ -1134,48 +1134,59 @@ async def test_resolve_prompt_variations():
     # 2. Sync callable taking query
     def sync_query(query):
         return f"Query: {query}"
+
     assert await _resolve_prompt(sync_query, "test") == "Query: test"
 
     # 3. Sync callable taking no arguments (fallback)
     def sync_empty():
         return "empty"
+
     assert await _resolve_prompt(sync_empty, "test") == "empty"
 
     # 4. Sync callable taking query, session_id, and context
     def sync_full(query, session_id, context):
         return f"Q:{query} S:{session_id} C:{context.get('x')}"
+
     assert await _resolve_prompt(sync_full, "test", "session-1", {"x": 42}) == "Q:test S:session-1 C:42"
 
     # 5. Sync callable with kwargs
     def sync_kwargs(**kwargs):
         return f"Q:{kwargs.get('query')} S:{kwargs.get('session_id')} C:{kwargs.get('context', {}).get('x')}"
+
     assert await _resolve_prompt(sync_kwargs, "test", "session-1", {"x": 42}) == "Q:test S:session-1 C:42"
 
     # 6. Async callable taking query
     async def async_query(query):
         return f"Query: {query}"
+
     assert await _resolve_prompt(async_query, "test") == "Query: test"
 
     # 7. Async callable taking no arguments (fallback)
     async def async_empty():
         return "empty"
+
     assert await _resolve_prompt(async_empty, "test") == "empty"
 
     # 8. Async callable taking query, session_id, and context
     async def async_full(query, session_id, context):
         return f"Q:{query} S:{session_id} C:{context.get('x')}"
+
     assert await _resolve_prompt(async_full, "test", "session-1", {"x": 42}) == "Q:test S:session-1 C:42"
 
     # 9. Async callable with kwargs
     async def async_kwargs(**kwargs):
         return f"Q:{kwargs.get('query')} S:{kwargs.get('session_id')} C:{kwargs.get('context', {}).get('x')}"
+
     assert await _resolve_prompt(async_kwargs, "test", "session-1", {"x": 42}) == "Q:test S:session-1 C:42"
 
     # 10. TypeError/ValueError in signature inspect fallback
     import inspect
+
     with patch("inspect.signature", side_effect=TypeError("mocked")):
+
         def dummy_callable(query):
             return f"Fallback: {query}"
+
         # Since inspect raises TypeError, params is empty, kwargs is empty.
         # Calling dummy_callable(**{}) (i.e. dummy_callable()) fails with TypeError.
         # Fallback to dummy_callable(query) works.
@@ -1183,15 +1194,18 @@ async def test_resolve_prompt_variations():
 
         def dummy_no_args():
             return "no_args"
+
         # Calling dummy_no_args(**{}) works.
         assert await _resolve_prompt(dummy_no_args, "test") == "no_args"
 
         async def dummy_async_callable(query):
             return f"Fallback: {query}"
+
         assert await _resolve_prompt(dummy_async_callable, "test") == "Fallback: test"
 
         async def dummy_async_no_args():
             return "no_args"
+
         assert await _resolve_prompt(dummy_async_no_args, "test") == "no_args"
 
     # 11. Nested fallback to prompt() when both prompt(**kwargs) and prompt(query) raise TypeError
@@ -1219,5 +1233,3 @@ async def test_resolve_prompt_variations():
         # async_no_args("test") -> TypeError
         # async_no_args() -> success!
         assert await _resolve_prompt(async_no_args, "test") == "async_no_args_success"
-
-

@@ -142,4 +142,3 @@ def test_config_routing_system_instruction_defaults_and_env(monkeypatch):
     monkeypatch.setenv("ROUTING_SYSTEM_INSTRUCTION", "Custom Supervisor Instructions")
     config_env = OrchestratorConfig.from_env()
     assert config_env.routing_system_instruction == "Custom Supervisor Instructions"
-

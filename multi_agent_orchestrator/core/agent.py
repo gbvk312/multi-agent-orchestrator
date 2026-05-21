@@ -4,7 +4,7 @@ import functools
 import inspect
 import logging
 import random
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from typing import Any
 
 from google import genai
@@ -47,6 +47,7 @@ async def _resolve_prompt(
     if not callable(prompt):
         return prompt
 
+    params: Mapping[str, inspect.Parameter]
     try:
         sig = inspect.signature(prompt)
         params = sig.parameters
@@ -282,7 +283,9 @@ class BaseAgent:
                 contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
             contents.append(types.Content(role="user", parts=[types.Part.from_text(text=query)]))
 
-            system_instruction = await _resolve_prompt(self.system_prompt, query, session_id=session_id, context=context)
+            system_instruction = await _resolve_prompt(
+                self.system_prompt, query, session_id=session_id, context=context
+            )
 
             kwargs: dict[str, Any] = {
                 "system_instruction": system_instruction,

@@ -1327,4 +1327,3 @@ async def test_orchestrator_custom_routing_instruction_and_dynamic_prompt_resolu
     assert custom_instruction in prompt_text
     assert "A_prompt_for_session-456_v" in prompt_text
     assert "Simple Prompt B" in prompt_text
-

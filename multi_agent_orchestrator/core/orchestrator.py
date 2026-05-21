@@ -92,13 +92,12 @@ class Orchestrator:
                 resolved = str(prompt)
             agent_desc_list.append(f"- {name}: {resolved[:100]}...")
         agent_descriptions = "\n".join(agent_desc_list)
-        routing_system_instruction = (
-            self.routing_system_instruction
-            or "You are a routing supervisor. Based on the user's query, you must decide which agent is best suited to handle the request."
+        routing_system_instruction = self.routing_system_instruction or (
+            "You are a routing supervisor. Based on the user's query, "
+            "you must decide which agent is best suited to handle the request."
         )
         routing_prompt = (
-            f"{routing_system_instruction}\n\n"
-            f"Available agents:\n{agent_descriptions}\n\nUser Query: \"{query}\""
+            f'{routing_system_instruction}\n\nAvailable agents:\n{agent_descriptions}\n\nUser Query: "{query}"'
         )
         schema = types.Schema(type=types.Type.STRING, enum=agent_names)
         try:

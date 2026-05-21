@@ -31,7 +31,10 @@ class OrchestratorConfig(BaseModel):
     propagate_errors: bool = Field(default=False)
     max_handoffs: int = Field(default=5, ge=1)
     routing_system_instruction: str = Field(
-        default="You are a routing supervisor. Based on the user's query, you must decide which agent is best suited to handle the request."
+        default=(
+            "You are a routing supervisor. Based on the user's query, "
+            "you must decide which agent is best suited to handle the request."
+        )
     )
 
     @classmethod
@@ -50,7 +53,10 @@ class OrchestratorConfig(BaseModel):
             "max_handoffs": int(os.getenv("MAX_HANDOFFS", "5")),
             "routing_system_instruction": os.getenv(
                 "ROUTING_SYSTEM_INSTRUCTION",
-                "You are a routing supervisor. Based on the user's query, you must decide which agent is best suited to handle the request."
+                (
+                    "You are a routing supervisor. Based on the user's query, "
+                    "you must decide which agent is best suited to handle the request."
+                ),
             ),
         }
         env_map.update(overrides)
