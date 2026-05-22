@@ -30,6 +30,12 @@ class OrchestratorConfig(BaseModel):
     routing_temperature: float = Field(default=0.0, ge=0, le=2)
     propagate_errors: bool = Field(default=False)
     max_handoffs: int = Field(default=5, ge=1)
+    routing_system_instruction: str = Field(
+        default=(
+            "You are a routing supervisor. Based on the user's query, "
+            "you must decide which agent is best suited to handle the request."
+        )
+    )
 
     @classmethod
     def from_env(cls, **overrides: Any) -> "OrchestratorConfig":
@@ -45,6 +51,13 @@ class OrchestratorConfig(BaseModel):
             "routing_temperature": float(os.getenv("ROUTING_TEMPERATURE", "0.0")),
             "propagate_errors": os.getenv("PROPAGATE_ERRORS", "false").lower() in ("true", "1", "yes"),
             "max_handoffs": int(os.getenv("MAX_HANDOFFS", "5")),
+            "routing_system_instruction": os.getenv(
+                "ROUTING_SYSTEM_INSTRUCTION",
+                (
+                    "You are a routing supervisor. Based on the user's query, "
+                    "you must decide which agent is best suited to handle the request."
+                ),
+            ),
         }
         env_map.update(overrides)
         return cls(**env_map)
