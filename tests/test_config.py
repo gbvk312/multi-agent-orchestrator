@@ -142,3 +142,20 @@ def test_config_routing_system_instruction_defaults_and_env(monkeypatch):
     monkeypatch.setenv("ROUTING_SYSTEM_INSTRUCTION", "Custom Supervisor Instructions")
     config_env = OrchestratorConfig.from_env()
     assert config_env.routing_system_instruction == "Custom Supervisor Instructions"
+
+
+def test_config_from_env_invalid_int(monkeypatch):
+    """from_env() should raise ValueError on invalid integers in env."""
+    monkeypatch.setenv("MAX_TOOL_ROUNDS", "not-an-int")
+    with pytest.raises(ValueError) as excinfo:
+        OrchestratorConfig.from_env()
+    assert "Invalid environment variable value for MAX_TOOL_ROUNDS" in str(excinfo.value)
+
+
+def test_config_from_env_invalid_float(monkeypatch):
+    """from_env() should raise ValueError on invalid floats in env."""
+    monkeypatch.setenv("TEMPERATURE", "not-a-float")
+    with pytest.raises(ValueError) as excinfo:
+        OrchestratorConfig.from_env()
+    assert "Invalid environment variable value for TEMPERATURE" in str(excinfo.value)
+

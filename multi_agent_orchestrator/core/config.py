@@ -43,14 +43,6 @@ class OrchestratorConfig(BaseModel):
         env_map: dict[str, Any] = {
             "gemini_api_key": os.getenv("GEMINI_API_KEY", ""),
             "default_model": os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"),
-            "max_tool_rounds": int(os.getenv("MAX_TOOL_ROUNDS", "5")),
-            "max_retries": int(os.getenv("MAX_RETRIES", "3")),
-            "max_history": int(os.getenv("MAX_HISTORY", "50")),
-            "agent_timeout": float(os.getenv("AGENT_TIMEOUT", "120.0")),
-            "temperature": float(os.getenv("TEMPERATURE", "0.2")),
-            "routing_temperature": float(os.getenv("ROUTING_TEMPERATURE", "0.0")),
-            "propagate_errors": os.getenv("PROPAGATE_ERRORS", "false").lower() in ("true", "1", "yes"),
-            "max_handoffs": int(os.getenv("MAX_HANDOFFS", "5")),
             "routing_system_instruction": os.getenv(
                 "ROUTING_SYSTEM_INSTRUCTION",
                 (
@@ -59,5 +51,38 @@ class OrchestratorConfig(BaseModel):
                 ),
             ),
         }
+
+        def _get_int(key: str, default: int) -> int:
+            val = os.getenv(key)
+            if val is None:
+                return default
+            try:
+                return int(val)
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid environment variable value for {key}: '{val}' is not a valid integer."
+                ) from e
+
+        def _get_float(key: str, default: float) -> float:
+            val = os.getenv(key)
+            if val is None:
+                return default
+            try:
+                return float(val)
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid environment variable value for {key}: '{val}' is not a valid float."
+                ) from e
+
+        env_map.update({
+            "max_tool_rounds": _get_int("MAX_TOOL_ROUNDS", 5),
+            "max_retries": _get_int("MAX_RETRIES", 3),
+            "max_history": _get_int("MAX_HISTORY", 50),
+            "agent_timeout": _get_float("AGENT_TIMEOUT", 120.0),
+            "temperature": _get_float("TEMPERATURE", 0.2),
+            "routing_temperature": _get_float("ROUTING_TEMPERATURE", 0.0),
+            "propagate_errors": os.getenv("PROPAGATE_ERRORS", "false").lower() in ("true", "1", "yes"),
+            "max_handoffs": _get_int("MAX_HANDOFFS", 5),
+        })
         env_map.update(overrides)
         return cls(**env_map)

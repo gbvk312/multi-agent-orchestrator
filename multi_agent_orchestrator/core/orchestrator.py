@@ -233,7 +233,13 @@ class Orchestrator:
     async def process_request_stream(
         self, session_id: str, query: str, context: dict[str, Any] | None = None
     ) -> AsyncGenerator[str, None]:
-        """Processes a user request and streams the response."""
+        """Processes a user request and streams the response.
+
+        Note:
+            Any post-processing via ``post_process()`` is applied *only* to the
+            accumulated response stored in the session's memory at the end of the stream.
+            The yielded chunks are streamed directly from the agent and are raw/unprocessed.
+        """
         trace_id = uuid.uuid4().hex[:12]
         logger.info("[%s] Streaming request for session=%s", trace_id, session_id)
 

@@ -230,3 +230,29 @@ async def test_memory_manager_lock_eviction_preserves_waiters():
     assert "session_with_waiter" in memory._locks
 
     await waiter
+
+
+@pytest.mark.asyncio
+async def test_in_memory_backend_ttl():
+    """Verify that InMemoryBackend prunes expired sessions."""
+    import time
+    backend = InMemoryBackend(ttl_seconds=1)
+    await backend.save("expired_session", [{"role": "user", "content": "hi"}])
+    await backend.save_state("expired_session", {"foo": "bar"})
+
+    # Immediately it should be present
+    assert len(await backend.load("expired_session")) == 1
+    assert (await backend.load_state("expired_session")) == {"foo": "bar"}
+
+    # Mock time passing by modifying the recorded timestamp for load_state
+    backend._timestamps["expired_session"] = time.time() - 2.0
+    assert await backend.load_state("expired_session") == {}
+
+    # Now re-save and mock time passing for load
+    await backend.save("expired_session", [{"role": "user", "content": "hi"}])
+    backend._timestamps["expired_session"] = time.time() - 2.0
+    assert await backend.load("expired_session") == []
+
+    # Check a non-existent session with TTL enabled to cover last_updated is None
+    assert await backend.load("non_existent_session") == []
+

@@ -1,4 +1,5 @@
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -38,25 +39,46 @@ class MemoryBackend(ABC):
 class InMemoryBackend(MemoryBackend):
     """In-process dictionary-based memory backend (default)."""
 
-    def __init__(self) -> None:
+    def __init__(self, ttl_seconds: int | None = None) -> None:
+        self.ttl = ttl_seconds
         self._store: dict[str, list[dict[str, Any]]] = {}
         self._state_store: dict[str, dict[str, Any]] = {}
+        self._timestamps: dict[str, float] = {}
+
+    def _is_expired(self, session_id: str) -> bool:
+        if self.ttl is None:
+            return False
+        last_updated = self._timestamps.get(session_id)
+        if last_updated is None:
+            return False
+        return (time.time() - last_updated) > self.ttl
 
     async def load(self, session_id: str) -> list[dict[str, Any]]:
+        if self._is_expired(session_id):
+            await self.delete(session_id)
+            return []
         return list(self._store.get(session_id, []))
 
     async def save(self, session_id: str, history: list[dict[str, Any]]) -> None:
         self._store[session_id] = history
+        if self.ttl is not None:
+            self._timestamps[session_id] = time.time()
 
     async def delete(self, session_id: str) -> None:
         self._store.pop(session_id, None)
         self._state_store.pop(session_id, None)
+        self._timestamps.pop(session_id, None)
 
     async def load_state(self, session_id: str) -> dict[str, Any]:
+        if self._is_expired(session_id):
+            await self.delete(session_id)
+            return {}
         return dict(self._state_store.get(session_id, {}))
 
     async def save_state(self, session_id: str, state: dict[str, Any]) -> None:
         self._state_store[session_id] = state
+        if self.ttl is not None:
+            self._timestamps[session_id] = time.time()
 
 
 class MemoryManager:
