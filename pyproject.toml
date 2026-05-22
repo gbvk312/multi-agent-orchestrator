@@ -7,7 +7,7 @@ name = "multi-agent-orchestrator"
 version = "0.1.0"
 description = "An asynchronous, Gemini-powered framework for multi-agent orchestration."
 authors = [
-    { name = "gbvk", email = "masked@example.com" }
+    { name = "gbvk", email = "gbvk.312@gmail.com" }
 ]
 readme = "README.md"
 requires-python = ">=3.11"
