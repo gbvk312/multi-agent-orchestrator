@@ -158,4 +158,3 @@ def test_config_from_env_invalid_float(monkeypatch):
     with pytest.raises(ValueError) as excinfo:
         OrchestratorConfig.from_env()
     assert "Invalid environment variable value for TEMPERATURE" in str(excinfo.value)
-
