@@ -49,7 +49,7 @@ storage = [
 ]
 api = [
     "fastapi>=0.109.0",
-    "uvicorn>=0.47.0",
+    "uvicorn>=0.48.0",
 ]
 
 [tool.setuptools.packages.find]
