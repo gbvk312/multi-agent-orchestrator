@@ -38,13 +38,13 @@ dev = [
     "ruff>=0.4.0",
     "mypy>=2.1.0",
     "pre-commit>=4.6.0",
-    "redis>=7.4.0",
+    "redis>=8.0.0",
     "aiosqlite>=0.22.1",
     "mkdocs-material>=9.7.6",
     "mkdocstrings[python]>=1.0.4",
 ]
 storage = [
-    "redis>=7.4.0",
+    "redis>=8.0.0",
     "aiosqlite>=0.22.1",
 ]
 api = [
