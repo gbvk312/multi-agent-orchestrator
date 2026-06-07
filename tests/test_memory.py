@@ -236,6 +236,7 @@ async def test_memory_manager_lock_eviction_preserves_waiters():
 async def test_in_memory_backend_ttl():
     """Verify that InMemoryBackend prunes expired sessions."""
     import time
+
     backend = InMemoryBackend(ttl_seconds=1)
     await backend.save("expired_session", [{"role": "user", "content": "hi"}])
     await backend.save_state("expired_session", {"foo": "bar"})
@@ -255,4 +256,3 @@ async def test_in_memory_backend_ttl():
 
     # Check a non-existent session with TTL enabled to cover last_updated is None
     assert await backend.load("non_existent_session") == []
-
